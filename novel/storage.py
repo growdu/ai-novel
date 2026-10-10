@@ -34,6 +34,30 @@ class Project:
         return self.novel_dir / "style.md"
 
     @property
+    def world_path(self):
+        return self.novel_dir / "world.md"
+
+    @property
+    def timeline_path(self):
+        return self.novel_dir / "timeline.md"
+
+    @property
+    def state_path(self):
+        return self.novel_dir / "state.md"
+
+    @property
+    def volumes_path(self):
+        return self.novel_dir / "volumes.md"
+
+    @property
+    def arcs_dir(self):
+        return self.novel_dir / "arcs"
+
+    @property
+    def foreshadowing_path(self):
+        return self.novel_dir / "foreshadowing.md"
+
+    @property
     def chapters_dir(self):
         return self.novel_dir / "chapters"
 
@@ -58,6 +82,8 @@ def init_project(root, title, theme="", meta=None):
     (root / PROJECT_DIR).mkdir(parents=True)
     (root / PROJECT_DIR / "chapters").mkdir()
     (root / PROJECT_DIR / "history").mkdir()
+    (root / PROJECT_DIR / "arcs").mkdir()
+    (root / PROJECT_DIR / "reports").mkdir()
     p = Project(root=root, title=title, meta=meta or {"theme": theme})
     _write_yaml(p.project_yaml, {"title": title, "theme": theme, **(meta or {})})
     if theme and not p.outline_path.exists():
@@ -65,6 +91,16 @@ def init_project(root, title, theme="", meta=None):
             "# 大纲\n\n> 主题: " + theme + "\n\n（待生成）\n",
             encoding="utf-8",
         )
+    if not p.state_path.exists():
+        p.state_path.write_text("# 故事状态\n\n（暂无；写完第一章后会自动生成摘要）\n", encoding="utf-8")
+    if not p.world_path.exists():
+        p.world_path.write_text("# 世界观\n\n（待生成；包括地理、历史、关键设定、神话、地理与时代的硬规则）\n", encoding="utf-8")
+    if not p.timeline_path.exists():
+        p.timeline_path.write_text("# 时间线\n\n（待生成；按故事内时间顺序记录关键事件）\n", encoding="utf-8")
+    if not p.foreshadowing_path.exists():
+        p.foreshadowing_path.write_text("# 伏笔簿\n\n（待生成；记录埋下的钩子与回收时间）\n", encoding="utf-8")
+    if not p.volumes_path.exists():
+        p.volumes_path.write_text("# 分卷\n\n（待生成；长篇可分多卷，每卷一个核心冲突）\n", encoding="utf-8")
     return p
 
 

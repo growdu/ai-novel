@@ -137,16 +137,20 @@ def chapter(
         "style": style,
         "chapter_plan": plan,
         "prev_chapter_tail": prev_tail,
+        "state": proj.state_path.read_text(encoding="utf-8") if proj.state_path.exists() else "",
+        "foreshadow": proj.foreshadowing_path.read_text(encoding="utf-8") if proj.foreshadowing_path.exists() else "",
+        "world": proj.world_path.read_text(encoding="utf-8") if proj.world_path.exists() else "",
+        "timeline": proj.timeline_path.read_text(encoding="utf-8") if proj.timeline_path.exists() else "",
+        "volumes": proj.volumes_path.read_text(encoding="utf-8") if proj.volumes_path.exists() else "",
+        "arc": (proj.arcs_dir / "_overview.md").read_text(encoding="utf-8") if (proj.arcs_dir / "_overview.md").exists() else "",
     }
     req = G.ChapterRequest(chapter_no=no, target_words=words or cfg.target_chapter_words)
     client = LLMClient(cfg)
-    res = G.write_chapter(req, ctx, client=client, max_iters=iters, do_polish=not no_polish)
+    res = G.write_chapter_extended(req, ctx, project=proj, client=client, max_iters=iters, update_after=True, verbose=True)
     path = S.save_chapter(proj, no, res.content)
     console.print("[green]已保存[/green] %s | 字数 %d | 迭代 %d 轮" % (path, res.word_count, res.iterations))
     if res.detect_report:
         console.print(Panel(res.detect_report[:1500], title="AI 味检测（节选）"))
-    if res.review_report:
-        console.print(Panel(res.review_report[:1500], title="审稿（节选）"))
     if res.review_report:
         console.print(Panel(res.review_report[:1500], title="审稿（节选）"))
 
@@ -176,10 +180,16 @@ def write(
             "style": style,
             "chapter_plan": plan,
             "prev_chapter_tail": prev_tail,
+            "state": proj.state_path.read_text(encoding="utf-8") if proj.state_path.exists() else "",
+            "foreshadow": proj.foreshadowing_path.read_text(encoding="utf-8") if proj.foreshadowing_path.exists() else "",
+            "world": proj.world_path.read_text(encoding="utf-8") if proj.world_path.exists() else "",
+            "timeline": proj.timeline_path.read_text(encoding="utf-8") if proj.timeline_path.exists() else "",
+            "volumes": proj.volumes_path.read_text(encoding="utf-8") if proj.volumes_path.exists() else "",
+            "arc": (proj.arcs_dir / "_overview.md").read_text(encoding="utf-8") if (proj.arcs_dir / "_overview.md").exists() else "",
         }
         req = G.ChapterRequest(chapter_no=n, target_words=words or cfg.target_chapter_words)
         console.print("\n[bold]=== 第 %d 章 ===[/bold]" % n)
-        res = G.write_chapter(req, ctx, client=client, max_iters=iters, do_polish=not no_polish)
+        res = G.write_chapter_extended(req, ctx, project=proj, client=client, max_iters=iters, update_after=True, verbose=True)
         S.save_chapter(proj, n, res.content)
         console.print("[green]已保存[/green] %s | 字数 %d | 迭代 %d 轮" % (proj.chapters_dir / ("%04d.md" % n), res.word_count, res.iterations))
 
@@ -230,6 +240,56 @@ def detect(
         p.write_text(res.content, encoding="utf-8")
         console.print("[green]报告已保存:[/green] %s" % p)
 
+@app.command(name="world")
+def world_cmd():
+    """生成世界观设定（基于大纲与主题）。"""
+    proj = S.load_project()
+    cfg = load_global()
+    theme = proj.meta.get("theme", "")
+    genre = proj.meta.get("genre", "现实")
+    G.generate_world(proj, theme, genre, client=LLMClient(cfg))
+    console.print("[green]已保存[/green] " + str(proj.world_path))
+
+@app.command(name="volumes")
+def volumes_cmd():
+    """分卷（长篇分多卷）。"""
+    proj = S.load_project()
+    cfg = load_global()
+    G.generate_volumes(proj, client=LLMClient(cfg))
+    console.print("[green]已保存[/green] " + str(proj.volumes_path))
+
+@app.command()
+def timeline():
+    """基于大纲+已写章节，维护故事内时间线。"""
+    proj = S.load_project()
+    cfg = load_global()
+    G.generate_timeline(proj, client=LLMClient(cfg))
+    console.print("[green]已保存[/green] " + str(proj.timeline_path))
+
+@app.command()
+def state():
+    """手动刷新故事状态摘要（每章写完会自动更新）。"""
+    proj = S.load_project()
+    cfg = load_global()
+    G.update_state(proj, client=LLMClient(cfg))
+    console.print("[green]已保存[/green] " + str(proj.state_path))
+
+@app.command()
+def arc():
+    """刷新人物弧线总览。"""
+    proj = S.load_project()
+    cfg = load_global()
+    G.update_arc(proj, client=LLMClient(cfg))
+    console.print("[green]已保存[/green] " + str(proj.arcs_dir / "_overview.md"))
+
+@app.command()
+def foreshadow():
+    """刷新伏笔簿。"""
+    proj = S.load_project()
+    cfg = load_global()
+    G.update_foreshadow(proj, client=LLMClient(cfg))
+    console.print("[green]已保存[/green] " + str(proj.foreshadowing_path))
+
 @app.command()
 def status():
     """查看当前项目的状态。"""
@@ -249,6 +309,12 @@ def status():
     table.add_row("大纲", "已生成" if _is_set(proj.outline_path) else "未生成（占位或未生成）")
     table.add_row("人物志", "已生成" if _is_set(proj.characters_path) else "未生成（占位或未生成）")
     table.add_row("文风", "已设置" if _is_set(proj.style_path, 30) else "未设置")
+    table.add_row("世界观", "已生成" if _is_set(proj.world_path) else "未生成")
+    table.add_row("分卷", "已生成" if _is_set(proj.volumes_path) else "未生成")
+    table.add_row("时间线", "已生成" if _is_set(proj.timeline_path) else "未生成")
+    table.add_row("故事状态", "已生成" if _is_set(proj.state_path) else "未生成")
+    table.add_row("人物弧线", "已生成" if _is_set(proj.arcs_dir / "_overview.md") else "未生成")
+    table.add_row("伏笔簿", "已生成" if _is_set(proj.foreshadowing_path) else "未生成")
     chapters = proj.list_chapters()
     table.add_row("已写章节数", str(len(chapters)))
     for ch in chapters:

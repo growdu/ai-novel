@@ -15,11 +15,14 @@ from .config import GlobalConfig
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```")
+_PARTIAL_THINK_RE = re.compile(r"<think>[\s\S]*?(?=\n\n##|\Z)", re.IGNORECASE)
 
 def _strip_think_tags(text):
     if not text:
         return text
-    return _THINK_TAG_RE.sub("", text).strip()
+    text = _THINK_TAG_RE.sub("", text)
+    text = _PARTIAL_THINK_RE.sub("", text)
+    return text.strip()
 
 def _try_parse_json(text):
     text = _strip_think_tags(text or "")

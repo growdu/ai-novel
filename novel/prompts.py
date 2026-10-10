@@ -27,6 +27,18 @@ def polish():
     return _load("polish.md")
 def review():
     return _load("review.md")
+def state():
+    return _load("state.md")
+def world():
+    return _load("world.md")
+def timeline():
+    return _load("timeline.md")
+def foreshadow():
+    return _load("foreshadow.md")
+def volume():
+    return _load("volume.md")
+def arc():
+    return _load("arc.md")
 
 @dataclass
 class ChapterContext:
@@ -39,6 +51,15 @@ class ChapterContext:
     target_words: int
     feedback: str = ""
     extra: str = ""
+    # 长篇专属字段
+    state: str = ""
+    foreshadow: str = ""
+    world: str = ""
+    timeline: str = ""
+    volumes: str = ""
+    arc: str = ""
+    chapter_index_in_volume: int = 0
+    total_chapters_in_volume: int = 0
 
 def build_chapter_messages(ctx):
     sys_parts = [de_ai_flavour(), "", "## 你的具体任务：写一章小说", chapter()]
@@ -70,7 +91,25 @@ def build_chapter_messages(ctx):
         user_parts.extend(["", "## 上一轮审稿的修改指令（必须落地）", ctx.feedback])
     if ctx.extra:
         user_parts.extend(["", "## 作者额外要求", ctx.extra])
-    user = "\n".join(user_parts)
+    if ctx.world:
+        user_parts.extend(["", "## 世界观（用于约束设定与场景）", ctx.world])
+    if ctx.timeline:
+        user_parts.extend(["", "## 故事内时间线（用于约束时间）", ctx.timeline])
+    if ctx.volumes:
+        user_parts.extend(["", "## 全书分卷（用于节奏）", ctx.volumes])
+    if ctx.state:
+        user_parts.extend(["", "## 上一节状态（用于跨章连贯）", ctx.state])
+    if ctx.foreshadow:
+        user_parts.extend(["", "## 当前伏笔簿（用于埋设或回收钩子）", ctx.foreshadow])
+    if ctx.arc:
+        user_parts.extend(["", "## 核心人物弧线（用于人物变化一致）", ctx.arc])
+    if ctx.chapter_index_in_volume and ctx.total_chapters_in_volume:
+        user_parts.extend([
+            "",
+            "## 章节在卷内的位置",
+            "本章是当前卷的第 %d / %d 章。请根据这个位置控制节奏：开头偏稳、中段可加冲突、收尾偏余韵。" % (ctx.chapter_index_in_volume, ctx.total_chapters_in_volume),
+        ])
+    user = _NO_THINK_HINT + "\n".join(user_parts)
     return [Message("system", system), Message("user", user)]
 
 def build_outline_messages(title, theme, genre, target_words, characters, extra):
@@ -86,7 +125,7 @@ def build_outline_messages(title, theme, genre, target_words, characters, extra)
     if extra:
         user_parts.extend(["", "## 用户特别指定", extra])
     user_parts.extend(["", "## 输出要求", "- 直接输出大纲，不要任何元说明。", "- 章数等于目标总字数除以 3000 向上取整。"])
-    user = "\n".join(user_parts)
+    user = _NO_THINK_HINT + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
 
 def build_character_messages(outline_text, existing, extra):
@@ -97,7 +136,7 @@ def build_character_messages(outline_text, existing, extra):
     if extra:
         user_parts.extend(["", "## 作者特别要求", extra])
     user_parts.extend(["", "## 输出要求", "- 直接输出人物志，不要元说明。", "- 每个出场人物都覆盖。"])
-    user = "\n".join(user_parts)
+    user = _NO_THINK_HINT + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
 
 def build_detect_messages(content):
@@ -113,11 +152,12 @@ def build_polish_messages(content, chapter_plan, prev_tail, detect_report, extra
     if extra:
         user_parts.extend(["", "## 作者额外要求", extra])
     user_parts.extend(["", "## 输出要求", "- 直接输出重写后的完整正文。", "- 长度变化不超过正负 25%。"])
-    user = "\n".join(user_parts)
+    user = _NO_THINK_HINT + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
 
 def build_review_messages(content, chapter_plan, prev_tail):
     sys = de_ai_flavour() + "\n\n## 你的具体任务：审稿并给出修改指令\n\n" + review()
     user_parts = ["## 当前章节正文", content, "", "## 本章规划", chapter_plan, "", "## 上一章结尾", prev_tail or "（这是第一章）"]
-    user = "\n".join(user_parts)
+    user = _NO_THINK_HINT + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
+_NO_THINK_HINT = "\n[系统提醒] 直接输出所要求的内容，不要任何 think 块或思考性话语。\n"
