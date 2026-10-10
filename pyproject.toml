@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "novel-writer"
+version = "0.1.0"
+description = "AI 小说创作工具：自动生成大纲、人物、章节，专注于减少 AI 味道"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "requests>=2.31.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+novel = "novel_cli:app"
+
+[tool.setuptools]
+py-modules = ["novel_cli"]
