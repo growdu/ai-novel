@@ -38,13 +38,20 @@ novel status
 - novel init 创建新项目
 - novel outline 生成或重写大纲
 - novel characters 生成或扩展人物志
+- novel world 生成世界观
+- novel volumes 长篇分卷
 - novel chapter N 写第 N 章
 - novel write 连续写多章
 - novel polish N 对第 N 章做去 AI 味润色
 - novel detect N 只检测第 N 章 AI 味
+- novel timeline 维护时间线
+- novel state 维护故事状态摘要
+- novel foreshadow 维护伏笔簿
+- novel arc 维护人物弧线
+- novel volume-report --volume N 第 N 卷的卷末报告
+- novel check 跨章节一致性检查
 - novel status 查看项目状态
 - novel config 查看或修改全局配置
-- DRY_RUN=true novel ... 不调用 API，只打印提示词
 - DRY_RUN=true novel ... 不调用 API，只打印提示词
 # 去 AI 味的设计哲学
 工具能做的只是把"好作家会规避的事情"显式写进提示词，再让模型自检。核心文件是 prompts/de_ai_flavour.md，主要做了这几件事：
@@ -53,6 +60,25 @@ novel status
 3. 作家风格参考：老舍、双雪涛、汪曾祺、余华等具体作家，让模型有具体模仿对象而不是泛泛说"文笔流畅"。
 4. 每章自检清单：模型写完后必须自检 AI 味。
 5. 多轮迭代：detect 到 review 到 polish，每轮把"问题清单"作为下一轮 prompt 的一部分。
+# 长篇小说工作流
+项目初始化后推荐顺序：
+1. novel outline 生成大纲（20 万字 → 约 60-70 章）
+2. novel characters 生成人物志
+3. novel world 生成世界观（地理、历史、社会、硬规则）
+4. novel volumes 长篇分卷（每卷核心冲突、节奏、卷末状态）
+5. novel chapter 5 6 7 ... 逐章写
+6. novel write --start 10 --end 15 连续写
+每章写完会自动维护 state、foreshadow、arc 等。
+关键操作：
+- novel timeline 维护时间线（自动检测冲突）
+- novel check 跨章节一致性检查
+- novel volume-report --volume N 第 N 卷卷末报告
+- 把 samples/ 目录放上你喜欢的风格片段，模型会自动模仿
+# 风格样本（few-shot）
+项目下 .novel/samples/ 目录里放 1-3 个 .md 文件，每个文件 200-1500 字。
+模型会在写每章时自动随机抽 1-2 段作为风格参考。
+文件命名建议用数字（01.md、02.md），方便排序。
+
 # 自定义提示词
 所有提示词位于 prompts/ 目录：
 - de_ai_flavour.md 去 AI 味的总规则，所有任务都会加载它
