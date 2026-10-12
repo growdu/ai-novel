@@ -128,6 +128,12 @@ doctor：自动诊断项目
 smoke_test.sh：端到端冒烟测试
 README 全面重写
 
+## 5.7 v0.7 写作流增强（commits 1bfda0a, b58349a, 9924adc, c988348）
+PROGRESS.md：完整的设计决策与演进日志
+diff：对比任意两版章节的差异
+prompt：每项目独立的提示词管理
+batch：批量执行 polish / detect / radar / title
+
 # 6. 已知问题与限制
 
 ## 6.1 think 截断
