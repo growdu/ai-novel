@@ -450,6 +450,19 @@ def write_chapter(req, ctx, client=None, max_iters=2, do_detect=True, do_polish=
         verbose=verbose,
     )
     content = _strip_meta(result.content)
+    # 自动重试：如果首轮 think 截断导致空内容，重试最多 2 次
+    auto_retry = 0
+    while (not content or len(content) < 200) and auto_retry < 2:
+        auto_retry += 1
+        if verbose:
+            print("[auto-retry] 首轮内容过短/为空，重试 #%d..." % auto_retry)
+        retry_res = client.chat_with_continuation(
+            msgs,
+            target_words=req.target_words,
+            max_total_tokens=chapter_budget + 16000,
+            temperature=0.95,
+        )
+        content = _strip_meta(retry_res.content)
     history = [("v1", content)]
     detect_report = ""
     review_report = ""
