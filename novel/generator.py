@@ -42,6 +42,27 @@ def load_style_samples(project, max_samples=2, max_chars=2000):
         return ""
     return "[重要] 以下是作者手写的风格样本片段，你必须深度模仿这个语感来写本次章节。\n\n" + "\n\n---\n\n".join(blobs)
 
+def continue_chapter(project, chapter_no, instruction, client=None, target_words=1200):
+    """在已有章节末尾接写一段新内容。"""
+    client = client or LLMClient(GlobalConfig())
+    content = S.load_chapter(project, chapter_no)
+    if not content:
+        return None
+    after_tail = content[-200:]
+    state_blob = project.state_path.read_text(encoding="utf-8") if project.state_path.exists() else ""
+    chapter_plan = parse_chapter_plan(project.outline_path.read_text(encoding="utf-8") if project.outline_path.exists() else "", chapter_no)
+    msgs = P.build_continue_chapter_messages(after_tail, content, state_blob, chapter_plan, instruction)
+    res = client.chat_with_continuation(
+        msgs,
+        target_words=target_words,
+        max_total_tokens=20000,
+        temperature=0.95,
+    )
+    new_text = (res.content or "").strip()
+    updated = content.rstrip() + "\n\n" + new_text
+    S.save_chapter(project, chapter_no, updated)
+    return new_text
+
 def generate_chapter_plan(project, chapter_no, client=None, feedback=""):
     """细化某章的章节大纲：输出 200-400 字具体场景规划。"""
     client = client or LLMClient(GlobalConfig())

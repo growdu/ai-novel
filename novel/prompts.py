@@ -53,6 +53,8 @@ def style_radar():
     return _load("style_radar.md")
 def expand_scene():
     return _load("expand_scene.md")
+def continue_chapter():
+    return _load("continue_chapter.md")
 def chapter_plan():
     return _load("chapter_plan.md")
 
@@ -207,6 +209,26 @@ def build_volume_report_messages(volume_title, chapters_blob, outline_blob, fore
         arc_blob,
     ]
     user = _META_PREFIX + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+
+def build_continue_chapter_messages(after_tail, full_content, state_blob, chapter_plan, instruction):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：在章节末尾接写一段新内容\n\n" + continue_chapter()
+    user_parts = [
+        "## 已有章节正文",
+        full_content,
+        "",
+        "## 章节末尾 200 字（从这里接写）",
+        after_tail,
+        "",
+        "## 上一节状态摘要",
+        state_blob or "（无）",
+        "",
+        "## 本章规划",
+        chapter_plan or "（无）",
+    ]
+    if instruction:
+        user_parts.extend(["", "## 作者意图", instruction])
+    user = _NO_THINK_HINT + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
 
 def build_chapter_plan_messages(chapter_no, outline_blob, coarse_plan, state_blob, characters_blob, feedback):

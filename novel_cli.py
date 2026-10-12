@@ -274,6 +274,23 @@ def volume_report(volume: int = typer.Option(1, "--volume", "-v", help="第几�
     G.generate_volume_report(proj, client=LLMClient(cfg), volume_no=volume)
     console.print("[green]已保存[/green] " + str(proj.novel_dir / "reports" / ("volume_%02d_report.md" % volume)))
 
+@app.command(name="continue")
+def continue_cmd(
+    no: int = typer.Argument(..., help="章节号"),
+    instruction: str = typer.Option("", "--with", "-w", help="作者意图"),
+    words: int = typer.Option(1200, "--words", help="目标字数"),
+):
+    """在已有章节末尾接写一段新内容。"""
+    proj = S.load_project()
+    cfg = load_global()
+    res = G.continue_chapter(proj, no, instruction, client=LLMClient(cfg), target_words=words)
+    if res is None:
+        console.print("[red]第 %d 章不存在。[/red]" % no)
+    else:
+        wc = S.chapter_word_count(res)
+        total = S.chapter_word_count(S.load_chapter(proj, no) or "")
+        console.print("[green]已接写 %d 字，章节总字数：%d[/green]" % (wc, total))
+
 @app.command()
 def plan(no: int = typer.Argument(..., help="章节号")):
     """细化某章的章节大纲。"""
