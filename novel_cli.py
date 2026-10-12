@@ -477,6 +477,87 @@ def progress():
             table.add_row("预计剩余", "%.0f 分钟（约 %.1f 小时）" % (est_min, est_min / 60))
     console.print(table)
 
+@app.command()
+def diff(
+    no: int = typer.Argument(..., help="章节号"),
+    ver_a: str = typer.Option(None, "--from", "-a", help="版本 A（章节号或版本号）"),
+    ver_b: str = typer.Option(None, "--to", "-b", help="版本 B（章节号或版本号）"),
+    stats_only: bool = typer.Option(False, "--stats", help="只显示统计"),
+    context: int = typer.Option(3, "--context", "-c", help="显示多少行上下文"),
+):
+    """对比两版章节的差异。"""
+    proj = S.load_project()
+    # 默认: --from current --to 最近历史
+    if ver_a is None and ver_b is None:
+        ver_a = "current"
+        ver_b = "last"
+    if ver_b == "last":
+        ver_b = None
+    from novel.diff_utils import unified_diff, stats_diff
+    current = S.load_chapter(proj, no)
+    if current is None:
+        console.print("[red]第 %d 章不存在。[/red]" % no)
+        raise typer.Exit(1)
+    hist_files = sorted(proj.history_dir.glob("chapter_%04d_v*.md" % no)) if proj.history_dir.exists() else []
+    if ver_a is None:
+        a_text = current
+        a_name = "current"
+    elif ver_a.lower() == "current":
+        a_text = current
+        a_name = "current"
+    elif ver_a.isdigit():
+        target = proj.chapters_dir / ("%04d.md" % int(ver_a))
+        if not target.exists():
+            console.print("[red]第 %d 章不存在。[/red]" % int(ver_a))
+            raise typer.Exit(1)
+        a_text = target.read_text(encoding="utf-8")
+        a_name = "chapter %04d" % int(ver_a)
+    else:
+        target = proj.history_dir / ("chapter_%04d_%s.md" % (no, ver_a))
+        if not target.exists():
+            console.print("[red]版本 %s 不存在。[/red]" % ver_a)
+            raise typer.Exit(1)
+        a_text = target.read_text(encoding="utf-8")
+        a_name = ver_a
+    if ver_b is None:
+        if hist_files:
+            b_text = hist_files[-1].read_text(encoding="utf-8")
+            b_name = hist_files[-1].name
+        else:
+            console.print("[yellow]没有历史版本可对比。[/yellow]")
+            raise typer.Exit(1)
+    elif ver_b.lower() == "current":
+        b_text = current
+        b_name = "current"
+    elif ver_b.isdigit():
+        target = proj.chapters_dir / ("%04d.md" % int(ver_b))
+        if not target.exists():
+            console.print("[red]第 %d 章不存在。[/red]" % int(ver_b))
+            raise typer.Exit(1)
+        b_text = target.read_text(encoding="utf-8")
+        b_name = "chapter %04d" % int(ver_b)
+    else:
+        target = proj.history_dir / ("chapter_%04d_%s.md" % (no, ver_b))
+        if not target.exists():
+            console.print("[red]版本 %s 不存在。[/red]" % ver_b)
+            raise typer.Exit(1)
+        b_text = target.read_text(encoding="utf-8")
+        b_name = ver_b
+    stats = stats_diff(a_text, b_text)
+    console.print("[bold]对比 " + a_name + " -> " + b_name + "[/bold]")
+    console.print("  新增行: %d  删除行: %d  相同行: %d  相似度: %.1f%%" % (
+        stats["added"], stats["removed"], stats["same"], stats["similarity"] * 100))
+    if not stats_only:
+        diff = unified_diff(a_text, b_text, a_name, b_name, n=context)
+        if diff:
+            console.print()
+            for line in diff.splitlines()[:200]:
+                console.print(line)
+            if len(diff.splitlines()) > 200:
+                console.print("\n[dim]... 以下省略（用 --context 调大）[/dim]")
+        else:
+            console.print("\n[green]两版本完全一致。[/green]")
+
 @app.command(name="expand-scene")
 def expand_scene_cmd(
     no: int = typer.Argument(..., help="章节号"),
