@@ -526,6 +526,70 @@ def prompt(
 
 
 @app.command()
+def rollback(
+    no: int = typer.Argument(..., help="章节号"),
+    to_version: str = typer.Option(None, "--to", help="回滚到哪个版本"),
+    list_only: bool = typer.Option(False, "--list", "-l", help="只列出历史版本"),
+):
+    """把当前章节回滚到指定历史版本（备份当前为新版本）。"""
+    proj = S.load_project()
+    if list_only:
+        files = sorted(proj.history_dir.glob("chapter_%04d_v*.md" % no)) if proj.history_dir.exists() else []
+        if not files:
+            console.print("[yellow]无历史版本。[/yellow]")
+            return
+        console.print("[bold]第 " + str(no) + " 章历史版本[/bold]")
+        for f in files:
+            import time
+            t = time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime))
+            console.print("  " + f.stem + "  " + str(f.stat().st_size) + " 字节  " + t)
+        return
+    if to_version is None:
+        console.print("[red]请指定 --to v1 / v2 ... 或 --list。[/red]")
+        raise typer.Exit(1)
+    target = proj.history_dir / ("chapter_%04d_%s.md" % (no, to_version))
+    if not target.exists():
+        console.print("[red]版本 %s 不存在。[/red]" % to_version)
+        raise typer.Exit(1)
+    current = S.load_chapter(proj, no)
+    if current:
+        S.save_chapter(proj, no, current, backup=True)
+    target_text = target.read_text(encoding="utf-8")
+    S.save_chapter(proj, no, target_text, backup=False)
+    console.print("[green]已回滚第 " + str(no) + " 章到 " + to_version + "。回滚前内容已备份为新版本。[/green]" % (no, to_version))
+
+@app.command()
+def fix(
+    no: int = typer.Argument(..., help="章节号"),
+    dry: bool = typer.Option(True, "--dry/--no-dry", help="只检查不修复"),
+):
+    """检测并修复异常章节（0 字节 / 过短 / 残片）。"""
+    proj = S.load_project()
+    target = proj.chapters_dir / ("%04d.md" % no)
+    if not target.exists():
+        console.print("[red]第 " + str(no) + " 章不存在。[/red]")
+        return
+    text = target.read_text(encoding="utf-8")
+    wc = S.chapter_word_count(text)
+    issues = []
+    if wc < 100:
+        issues.append("字数过少（" + str(wc) + " 字）")
+    if "<think>" in text:
+        issues.append("包含未剥 think 标签")
+    if " 区块" in text:
+        issues.append("包含 think 残片")
+    if "OK so" in text[:200] or "Let me" in text[:200]:
+        issues.append("包含英文 think 残片")
+    if issues:
+        console.print("[yellow]第 " + str(no) + " 章异常：[/yellow]")
+        for i, s in enumerate(issues, 1):
+            console.print("  " + str(i) + ". " + s)
+        if not dry:
+            console.print("\n[dim]建议：rm " + str(target) + " && novel chapter " + str(no) + " 重写[/dim]")
+    else:
+        console.print("[green]第 " + str(no) + " 章正常（" + str(wc) + " 字）。[/green]")
+
+@app.command()
 def batch(
     action: str = typer.Argument(..., help="批量动作: polish / detect / radar / title"),
     start: int = typer.Option(1, "--start", "-s", help="起始章节"),
