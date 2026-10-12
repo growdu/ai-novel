@@ -35,24 +35,45 @@ novel detect 1 --save
 novel status
 ```
 ## 命令一览
+基础：
 - novel init 创建新项目
-- novel outline 生成或重写大纲
-- novel characters 生成或扩展人物志
-- novel world 生成世界观
-- novel volumes 长篇分卷
-- novel chapter N 写第 N 章
-- novel write 连续写多章
-- novel polish N 对第 N 章做去 AI 味润色
-- novel detect N 只检测第 N 章 AI 味
-- novel timeline 维护时间线
-- novel state 维护故事状态摘要
-- novel foreshadow 维护伏笔簿
-- novel arc 维护人物弧线
-- novel volume-report --volume N 第 N 卷的卷末报告
-- novel check 跨章节一致性检查
 - novel status 查看项目状态
 - novel config 查看或修改全局配置
 - DRY_RUN=true novel ... 不调用 API，只打印提示词
+
+规划（建议顺序）：
+- novel outline 生成或重写大纲
+- novel characters 生成或扩展人物志
+- novel world 生成世界观
+- novel volumes 长篇分卷（5 卷结构 + 起止章节）
+- novel plan N 细化第 N 章大纲（200-400 字场景规划）
+
+写作：
+- novel chapter N 写第 N 章（写完自动维护 state/foreshadow/arc/title）
+- novel write -s 1 -e 5 连续写 1-5 章
+- novel sprint --count 10 自动从最后一章后写 10 章
+- novel continue N --with '意图' 在第 N 章末尾接写一段
+- novel chat N '自然语言指令' 协作修改某章
+
+协作润色：
+- novel polish N 对第 N 章做去 AI 味润色（基于 detect+review 反馈）
+- novel detect N 只检测第 N 章 AI 味
+- novel expand-scene N --after '句子' --with '意图' 在指定位置接场景
+- novel radar N 风格雷达：6 维度量化与 samples 的相似度
+
+长篇一致性：
+- novel timeline 维护故事内时间线（含冲突预警）
+- novel state 维护故事状态摘要（最近 3 章压缩）
+- novel rolling 全书滚动摘要（每 5 章自动更新）
+- novel foreshadow 维护伏笔簿（F1-Fn 编号）
+- novel arc 维护人物弧线
+- novel check 跨章节一致性检查
+- novel volume-report --volume N 第 N 卷卷末报告
+- novel title N 为第 N 章生成标题
+
+管理：
+- novel history 查看所有章节的版本历史
+- novel progress 长篇写作进度统计
 # 去 AI 味的设计哲学
 工具能做的只是把"好作家会规避的事情"显式写进提示词，再让模型自检。核心文件是 prompts/de_ai_flavour.md，主要做了这几件事：
 1. 禁用表达清单：列了 20 多种典型 AI 句式作为强禁止。
