@@ -478,6 +478,54 @@ def progress():
     console.print(table)
 
 @app.command()
+def prompt(
+    name: str = typer.Argument(..., help="提示词名"),
+    show: bool = typer.Option(False, "--show", "-s", help="打印内容"),
+    edit: bool = typer.Option(False, "--edit", "-e", help="用 $EDITOR 编辑"),
+    lines: int = typer.Option(20, "--lines", "-l", help="show 模式下打印多少行"),
+    reset: bool = typer.Option(False, "--reset", help="恢复默认（删除项目副本）"),
+):
+    """查看/编辑当前提示词。每个项目的提示词独立存放在 .novel/prompts/。"""
+    proj = S.load_project()
+    from novel import prompts as P
+    proj_prompts_dir = proj.novel_dir / "prompts"
+    proj_prompts_dir.mkdir(parents=True, exist_ok=True)
+    proj_copy = proj_prompts_dir / (name + ".md")
+    default_path = P.PROMPTS_DIR / (name + ".md")
+    if not default_path.exists():
+        console.print("[red]提示词 %s.md 不存在。可用提示词：[/red]" % name)
+        for f in sorted(P.PROMPTS_DIR.glob("*.md")):
+            console.print("  - " + f.stem)
+        raise typer.Exit(1)
+    if reset:
+        if proj_copy.exists():
+            proj_copy.unlink()
+        console.print("[green]已恢复默认（删除项目副本 %s）[/green]" % proj_copy)
+        return
+    if not proj_copy.exists():
+        proj_copy.write_text(default_path.read_text(encoding="utf-8"), encoding="utf-8")
+        console.print("[dim]已从默认复制到 %s[/dim]" % proj_copy)
+    if show:
+        text = proj_copy.read_text(encoding="utf-8")
+        all_lines = text.splitlines()
+        for i, line in enumerate(all_lines[:lines], 1):
+            console.print("%4d  %s" % (i, line))
+        if len(all_lines) > lines:
+            console.print("...（共 %d 行）" % len(all_lines))
+        return
+    if edit:
+        import os, subprocess
+        editor = os.environ.get("EDITOR", "vi")
+        console.print("用 $EDITOR=%s 编辑 %s" % (editor, proj_copy))
+        subprocess.call([editor, str(proj_copy)])
+        console.print("[green]已保存。[/green]")
+        return
+    console.print("[bold]项目副本[/bold] %s (%d 字节)" % (proj_copy, proj_copy.stat().st_size))
+    console.print("[bold]默认路径[/bold] %s" % default_path)
+    console.print("使用 --show 查看内容，--edit 编辑，--reset 恢复默认。")
+
+
+@app.command()
 def diff(
     no: int = typer.Argument(..., help="章节号"),
     ver_a: str = typer.Option(None, "--from", "-a", help="版本 A（章节号或版本号）"),
