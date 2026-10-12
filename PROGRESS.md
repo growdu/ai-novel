@@ -134,6 +134,11 @@ diff：对比任意两版章节的差异
 prompt：每项目独立的提示词管理
 batch：批量执行 polish / detect / radar / title
 
+## 5.8 v0.8 实用工具集（commits c988348, 51c0825, a454219）
+rollback：章节回滚到任意历史版本（回滚前自动备份）
+fix：检测异常章节（0 字节、含 think 残片）
+audit：全项目综合审计表
+
 # 6. 已知问题与限制
 
 ## 6.1 think 截断
