@@ -349,6 +349,68 @@ def plan(no: int = typer.Argument(..., help="章节号")):
     console.print(Panel(res, title="第 %d 章细化大纲" % no))
     console.print("[green]已保存到[/green] " + str(proj.novel_dir / "chapter_plans" / ("%04d.md" % no)))
 
+@app.command()
+def doctor():
+    """自动诊断项目状态：检查必要文件、配置、潜在问题。"""
+    proj = S.load_project()
+    cfg = load_global()
+    issues = []
+    warnings = []
+    ok = []
+    if not cfg.api_key:
+        issues.append("未设置 OPENAI_API_KEY")
+    if cfg.target_chapter_words < 1000:
+        warnings.append("目标章节字数偏少，建议 2500-5000")
+    if cfg.temperature < 0.7:
+        warnings.append("temperature 偏稳，可能缺少变化")
+    if not proj.outline_path.exists() or proj.outline_path.stat().st_size < 100:
+        issues.append("大纲未生成（运行 novel outline）")
+    if not proj.characters_path.exists() or proj.characters_path.stat().st_size < 100:
+        issues.append("人物志未生成（运行 novel characters）")
+    if not proj.world_path.exists() or proj.world_path.stat().st_size < 100:
+        warnings.append("世界观未生成（运行 novel world，可选）")
+    if not proj.volumes_path.exists() or proj.volumes_path.stat().st_size < 100:
+        warnings.append("分卷未生成（运行 novel volumes，可选）")
+    if not proj.style_path.exists() or proj.style_path.stat().st_size < 100:
+        warnings.append("文风未设置（运行 init 时加 --style 或编辑 style.md）")
+    chapters = proj.list_chapters()
+    if not chapters:
+        warnings.append("还没有写任何章节（运行 novel chapter 1）")
+    else:
+        for c in chapters:
+            text = c.read_text(encoding="utf-8") if c.exists() else ""
+            wc = S.chapter_word_count(text)
+            if wc < 100:
+                issues.append("第 " + c.stem + " 章字数 " + str(wc) + " 异常（可能生成失败）")
+    samples = list(proj.samples_dir.glob("*.md")) if proj.samples_dir.exists() else []
+    samples = [s for s in samples if not s.name.startswith("_")]
+    if not samples:
+        warnings.append("samples/ 目录为空（放入作者手写片段可显著提升风格）")
+    if chapters and len(chapters) >= 2:
+        if proj.state_path.stat().st_size < 100:
+            warnings.append("state.md 过小（应该 >= 100 字节）")
+        if proj.foreshadowing_path.stat().st_size < 100:
+            warnings.append("foreshadowing.md 过小")
+    if not issues:
+        ok.append("通过所有关键检查")
+    table = Table(title="novel doctor 诊断报告")
+    table.add_column("状态")
+    table.add_column("条数")
+    table.add_row("[red]问题[/red]", str(len(issues)))
+    table.add_row("[yellow]警告[/yellow]", str(len(warnings)))
+    table.add_row("[green]通过[/green]", str(len(ok)))
+    console.print(table)
+    if issues:
+        console.print("\n[red]问题（必须修复）[/red]")
+        for i, s in enumerate(issues, 1):
+            console.print("  " + str(i) + ". " + s)
+    if warnings:
+        console.print("\n[yellow]警告（建议改进）[/yellow]")
+        for i, s in enumerate(warnings, 1):
+            console.print("  " + str(i) + ". " + s)
+    if ok and not issues and not warnings:
+        console.print("\n[green]✓ " + ok[0] + "[/green]")
+
 @app.command(name="progress")
 def progress():
     """长篇写作进度统计：字数、章节数、卷进度、估计完成时间。"""
