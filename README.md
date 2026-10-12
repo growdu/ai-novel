@@ -90,7 +90,11 @@ novel status
 
 管理：
 - novel history 查看所有章节的版本历史
-- novel progress 长篇写作进度统计
+- novel diff <chapter> 对比任意两版章节
+- novel rollback <chapter> --to v1 把当前章节回滚到 v1
+- novel fix <chapter> 检测异常章节（0 字节 / 残片）
+- novel prompt <name> --show/--edit/--reset 查看编辑项目提示词
+- novel batch <action> 批量执行 polish/detect/radar/title
 # 去 AI 味的设计哲学
 工具能做的只是把"好作家会规避的事情"显式写进提示词，再让模型自检。核心文件是 prompts/de_ai_flavour.md，主要做了这几件事：
 1. 禁用表达清单：列了 20 多种典型 AI 句式作为强禁止。
