@@ -53,6 +53,8 @@ def style_radar():
     return _load("style_radar.md")
 def expand_scene():
     return _load("expand_scene.md")
+def chapter_plan():
+    return _load("chapter_plan.md")
 
 @dataclass
 class ChapterContext:
@@ -204,6 +206,28 @@ def build_volume_report_messages(volume_title, chapters_blob, outline_blob, fore
         "## 人物弧线总览",
         arc_blob,
     ]
+    user = _META_PREFIX + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+
+def build_chapter_plan_messages(chapter_no, outline_blob, coarse_plan, state_blob, characters_blob, feedback):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：细化章节大纲\n\n" + chapter_plan()
+    user_parts = [
+        "## 章节号：第 " + str(chapter_no) + " 章",
+        "",
+        "## 全书大纲（用于理解主线与人物）",
+        outline_blob,
+        "",
+        "## 当前要细化的粗规划",
+        coarse_plan or "（无）",
+        "",
+        "## 上一节状态（用于衔接）",
+        state_blob or "（无）",
+        "",
+        "## 人物志",
+        characters_blob or "（无）",
+    ]
+    if feedback:
+        user_parts.extend(["", "## 上一轮审稿意见（必须吸收）", feedback])
     user = _META_PREFIX + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
 

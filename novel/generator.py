@@ -42,6 +42,20 @@ def load_style_samples(project, max_samples=2, max_chars=2000):
         return ""
     return "[重要] 以下是作者手写的风格样本片段，你必须深度模仿这个语感来写本次章节。\n\n" + "\n\n---\n\n".join(blobs)
 
+def generate_chapter_plan(project, chapter_no, client=None, feedback=""):
+    """细化某章的章节大纲：输出 200-400 字具体场景规划。"""
+    client = client or LLMClient(GlobalConfig())
+    outline_blob = project.outline_path.read_text(encoding="utf-8") if project.outline_path.exists() else ""
+    coarse_plan = parse_chapter_plan(outline_blob, chapter_no)
+    state_blob = project.state_path.read_text(encoding="utf-8") if project.state_path.exists() else ""
+    characters_blob = project.characters_path.read_text(encoding="utf-8") if project.characters_path.exists() else ""
+    msgs = P.build_chapter_plan_messages(chapter_no, outline_blob, coarse_plan, state_blob, characters_blob, feedback)
+    res = client.chat_with_continuation(msgs, target_words=400, max_total_tokens=10000, temperature=0.7)
+    p = project.novel_dir / "chapter_plans" / ("%04d.md" % chapter_no)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("# 第 %d 章细化大纲\n\n" % chapter_no + res.content + "\n", encoding="utf-8")
+    return res.content
+
 def expand_scene(project, chapter_no, after_text, instruction, client=None, target_words=800):
     """交互式扩展：在 after_text 之后接写一段新场景。"""
     client = client or LLMClient(GlobalConfig())

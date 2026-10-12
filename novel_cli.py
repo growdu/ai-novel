@@ -274,6 +274,15 @@ def volume_report(volume: int = typer.Option(1, "--volume", "-v", help="第几�
     G.generate_volume_report(proj, client=LLMClient(cfg), volume_no=volume)
     console.print("[green]已保存[/green] " + str(proj.novel_dir / "reports" / ("volume_%02d_report.md" % volume)))
 
+@app.command()
+def plan(no: int = typer.Argument(..., help="章节号")):
+    """细化某章的章节大纲。"""
+    proj = S.load_project()
+    cfg = load_global()
+    res = G.generate_chapter_plan(proj, no, client=LLMClient(cfg))
+    console.print(Panel(res, title="第 %d 章细化大纲" % no))
+    console.print("[green]已保存到[/green] " + str(proj.novel_dir / "chapter_plans" / ("%04d.md" % no)))
+
 @app.command(name="expand-scene")
 def expand_scene_cmd(
     no: int = typer.Argument(..., help="章节号"),

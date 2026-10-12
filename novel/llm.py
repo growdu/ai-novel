@@ -22,10 +22,21 @@ def _strip_think_tags(text):
         return text
     text = _THINK_TAG_RE.sub("", text)
     text = _PARTIAL_THINK_RE.sub("", text)
-    # 如果未闭合 <think> 残片还在，从 <think> 开始到结尾全部剥掉
     if "<think>" in text:
         idx = text.find("<think>")
         text = text[:idx]
+    # 如果开头是英文 think 残片（"OK" "Let me" "So" "Now" 等）且 200 字符内出现 markdown 标题，从标题开始截断
+    import re as _re
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("## ") or s.startswith("# "):
+            # 找到首个标题，把之前的内容当作 think 残片扔掉
+            if i > 0 and i < 15:
+                head = "\n".join(lines[:i])
+                if _re.search(r"\bok\b|\blet me\b|\bso\b|\bnow\b|\bfirst\b|\bthe user\b|\bmodel\b|\bI should\b|\bnotice\b|\bwriting\b", head.lower()):
+                    text = "\n".join(lines[i:])
+                    break
     return text.strip()
 
 def _try_parse_json(text):
@@ -174,7 +185,8 @@ class LLMClient:
             content = _strip_think_tags(content)
             tail_stripped = content.rstrip()
             think_residue = "<think>" in content or " 区块" in content
-            looks_substantial = len(tail_stripped) > 800
+            min_chars = max(200, int((target_words or 1000) * 0.6))
+            looks_substantial = len(tail_stripped) >= min_chars
             looks_complete = (fr == "stop" and looks_substantial) or (tail_stripped.endswith(("。", "?", "!", "？", "！", "——")) and looks_substantial)
             if looks_complete and not think_residue:
                 break
