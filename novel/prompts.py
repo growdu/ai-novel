@@ -55,6 +55,8 @@ def expand_scene():
     return _load("expand_scene.md")
 def continue_chapter():
     return _load("continue_chapter.md")
+def chat_assistant():
+    return _load("chat_assistant.md")
 def chapter_plan():
     return _load("chapter_plan.md")
 
@@ -209,6 +211,23 @@ def build_volume_report_messages(volume_title, chapters_blob, outline_blob, fore
         arc_blob,
     ]
     user = _META_PREFIX + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+
+def build_chat_assistant_messages(chapter_no, full_content, prev_tail, instruction):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：协作修改章节\n\n" + chat_assistant()
+    user_parts = [
+        "## 章节号：第 " + str(chapter_no) + " 章",
+        "",
+        "## 作者意图",
+        instruction,
+        "",
+        "## 上一章结尾 200 字（用于衔接）",
+        prev_tail or "（这是第一章）",
+        "",
+        "## 当前章节正文",
+        full_content,
+    ]
+    user = _NO_THINK_HINT + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
 
 def build_continue_chapter_messages(after_tail, full_content, state_blob, chapter_plan, instruction):

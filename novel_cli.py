@@ -308,6 +308,21 @@ def volume_report(volume: int = typer.Option(1, "--volume", "-v", help="第几�
     G.generate_volume_report(proj, client=LLMClient(cfg), volume_no=volume)
     console.print("[green]已保存[/green] " + str(proj.novel_dir / "reports" / ("volume_%02d_report.md" % volume)))
 
+@app.command()
+def chat(
+    no: int = typer.Argument(..., help="章节号"),
+    message: str = typer.Argument(..., help="作者自然语言指令"),
+):
+    """协作修改助手：让 AI 按你的自然语言指令修改某章。"""
+    proj = S.load_project()
+    cfg = load_global()
+    res = G.chat_assistant(proj, no, message, client=LLMClient(cfg))
+    if res is None:
+        console.print("[red]第 %d 章不存在。[/red]" % no)
+    else:
+        wc = S.chapter_word_count(res)
+        console.print("[green]已修改第 %d 章，新字数：%d[/green]" % (no, wc))
+
 @app.command(name="continue")
 def continue_cmd(
     no: int = typer.Argument(..., help="章节号"),

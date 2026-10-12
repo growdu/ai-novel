@@ -42,6 +42,25 @@ def load_style_samples(project, max_samples=2, max_chars=2000):
         return ""
     return "[重要] 以下是作者手写的风格样本片段，你必须深度模仿这个语感来写本次章节。\n\n" + "\n\n---\n\n".join(blobs)
 
+def chat_assistant(project, chapter_no, instruction, client=None):
+    """协作修改助手。"""
+    client = client or LLMClient(GlobalConfig())
+    content = S.load_chapter(project, chapter_no)
+    if not content:
+        return None
+    prev = S.load_chapter(project, chapter_no - 1)
+    prev_tail = prev[-200:] if prev else ""
+    msgs = P.build_chat_assistant_messages(chapter_no, content, prev_tail, instruction)
+    res = client.chat_with_continuation(
+        msgs,
+        target_words=len(content) // 3,
+        max_total_tokens=20000,
+        temperature=0.9,
+    )
+    new_text = _strip_meta(res.content)
+    S.save_chapter(project, chapter_no, new_text)
+    return new_text
+
 def continue_chapter(project, chapter_no, instruction, client=None, target_words=1200):
     """在已有章节末尾接写一段新内容。"""
     client = client or LLMClient(GlobalConfig())
