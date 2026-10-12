@@ -526,6 +526,65 @@ def prompt(
 
 
 @app.command()
+def batch(
+    action: str = typer.Argument(..., help="批量动作: polish / detect / radar / title"),
+    start: int = typer.Option(1, "--start", "-s", help="起始章节"),
+    end: int = typer.Option(None, "--end", "-e", help="结束章节（默认最后一章）"),
+    skip_empty: bool = typer.Option(True, "--skip-empty", help="跳过空章节"),
+):
+    """批量执行 polish / detect / radar / title。"""
+    proj = S.load_project()
+    cfg = load_global()
+    client = LLMClient(cfg)
+    chapters = proj.list_chapters()
+    if not chapters:
+        console.print("[yellow]没有章节。[/yellow]")
+        return
+    last_no = max(int(c.stem) for c in chapters)
+    end = end or last_no
+    console.print("[bold]批量 " + action + "：第 " + str(start) + "-" + str(end) + " 章[/bold]")
+    for n in range(start, end + 1):
+        target = proj.chapters_dir / ("%04d.md" % n)
+        if not target.exists():
+            console.print("  [dim]第 " + str(n) + " 章不存在，跳过[/dim]")
+            continue
+        text = target.read_text(encoding="utf-8")
+        if skip_empty and S.chapter_word_count(text) < 100:
+            console.print("  [dim]第 " + str(n) + " 章字数过少，跳过[/dim]")
+            continue
+        try:
+            if action == "polish":
+                outline_text = proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else ""
+                plan = G.parse_chapter_plan(outline_text, n)
+                prev = S.load_chapter(proj, n - 1)
+                prev_tail = prev[-500:] if prev else ""
+                msgs = P.build_polish_messages(text, plan, prev_tail, "", "")
+                res = client.chat_with_continuation(msgs, target_words=len(text) // 3, max_total_tokens=20000, temperature=0.9)
+                new_text = (res.content or "").strip()
+                S.save_chapter(proj, n, new_text)
+                console.print("  [green]第 " + str(n) + " 章已润色[/green]")
+            elif action == "detect":
+                msgs = P.build_detect_messages(text)
+                res = client.chat(msgs, temperature=0.3, max_tokens=2000)
+                p = proj.novel_dir / "reports" / ("detect_%04d.md" % n)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(res.content, encoding="utf-8")
+                console.print("  [green]第 " + str(n) + " 章已检测 -> " + p.name + "[/green]")
+            elif action == "radar":
+                G.style_radar(proj, n, client=client)
+                console.print("  [green]第 " + str(n) + " 章已雷达[/green]")
+            elif action == "title":
+                G.generate_chapter_title(proj, n, client=client)
+                console.print("  [green]第 " + str(n) + " 章已生成标题[/green]")
+            else:
+                console.print("[red]未知动作: " + action + "。可用: polish / detect / radar / title[/red]")
+                raise typer.Exit(1)
+        except Exception as e:
+            console.print("  [red]第 " + str(n) + " 章失败: " + str(e) + "[/red]")
+    console.print("[bold]批量 " + action + " 完成[/bold]")
+
+
+@app.command()
 def diff(
     no: int = typer.Argument(..., help="章节号"),
     ver_a: str = typer.Option(None, "--from", "-a", help="版本 A（章节号或版本号）"),
