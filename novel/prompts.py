@@ -51,6 +51,8 @@ def chapter_title():
     return _load("chapter_title.md")
 def style_radar():
     return _load("style_radar.md")
+def expand_scene():
+    return _load("expand_scene.md")
 
 @dataclass
 class ChapterContext:
@@ -203,6 +205,24 @@ def build_volume_report_messages(volume_title, chapters_blob, outline_blob, fore
         arc_blob,
     ]
     user = _META_PREFIX + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+
+def build_expand_scene_messages(after_text, before_tail, full_content, instruction):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：在指定位置后接写一段新场景\n\n" + expand_scene()
+    user_parts = [
+        "## 已有章节正文",
+        full_content,
+        "",
+        "## 上一句（紧接其后开始写）",
+        after_text,
+        "",
+        "## 上一句之后 200 字上下文（用于接写理解）",
+        before_tail,
+        "",
+        "## 作者意图",
+        instruction or "（无，按场景自然延伸）",
+    ]
+    user = _NO_THINK_HINT + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
 
 def build_style_radar_messages(chapter_content, samples_blob):
