@@ -526,6 +526,56 @@ def prompt(
 
 
 @app.command()
+def audit(
+    start: int = typer.Option(1, "--start", "-s", help="起始章节"),
+    end: int = typer.Option(None, "--end", "-e", help="结束章节（默认最后一章）"),
+):
+    """对所有章节做综合审计：字数 + 异常 + AI 味 + 雷达。"""
+    import re as _re
+    proj = S.load_project()
+    chapters = proj.list_chapters()
+    if not chapters:
+        console.print("[yellow]没有章节。[/yellow]")
+        return
+    last_no = max(int(c.stem) for c in chapters)
+    end = end or last_no
+    table = Table(title="全项目审计")
+    table.add_column("章节")
+    table.add_column("字数")
+    table.add_column("状态")
+    table.add_column("AI 味")
+    table.add_column("雷达")
+    for n in range(start, end + 1):
+        target = proj.chapters_dir / ("%04d.md" % n)
+        if not target.exists():
+            table.add_row(str(n), "-", "[red]缺失[/red]", "-", "-")
+            continue
+        text = target.read_text(encoding="utf-8")
+        wc = S.chapter_word_count(text)
+        status = "[green]正常[/green]"
+        if wc < 100:
+            status = "[red]异常[/red]"
+        elif "<think>" in text or " 区块" in text:
+            status = "[red]有残片[/red]"
+        detect_path = proj.novel_dir / "reports" / ("detect_%04d.md" % n)
+        ai_score = "-"
+        if detect_path.exists():
+            d = detect_path.read_text(encoding="utf-8")
+            m = _re.search(r"AI 味指数[：:]?\s*(\d+)", d)
+            if m:
+                ai_score = m.group(1)
+        radar_path = proj.novel_dir / "reports" / ("style_radar_%04d.md" % n)
+        radar_score = "-"
+        if radar_path.exists():
+            r = radar_path.read_text(encoding="utf-8")
+            m = _re.search(r"总相似度[：:]?\s*(\d+)", r)
+            if m:
+                radar_score = m.group(1)
+        table.add_row(str(n), str(wc), status, ai_score, radar_score)
+    console.print(table)
+    console.print("\n[dim]提示：novel batch detect / radar 可批量生成缺失的报告[/dim]")
+
+@app.command()
 def rollback(
     no: int = typer.Argument(..., help="章节号"),
     to_version: str = typer.Option(None, "--to", help="回滚到哪个版本"),
