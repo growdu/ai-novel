@@ -283,6 +283,72 @@ def plan(no: int = typer.Argument(..., help="章节号")):
     console.print(Panel(res, title="第 %d 章细化大纲" % no))
     console.print("[green]已保存到[/green] " + str(proj.novel_dir / "chapter_plans" / ("%04d.md" % no)))
 
+@app.command(name="progress")
+def progress():
+    """长篇写作进度统计：字数、章节数、卷进度、估计完成时间。"""
+    proj = S.load_project()
+    chapters = proj.list_chapters()
+    total_chapters = 0
+    if proj.outline_path.exists():
+        import re
+        outline_text = proj.outline_path.read_text(encoding="utf-8")
+        # 匹配 '**第N章' 形式的章节规划
+        total_chapters = len(re.findall(r"\*\*第[一二三四五六七八九十百千零0-9]+章", outline_text))
+    target_words = proj.meta.get("target_words", 0)
+    written_words = sum(S.chapter_word_count(c.read_text(encoding="utf-8")) for c in chapters)
+    done_chapters = len(chapters)
+    if total_chapters == 0:
+        total_chapters = max(1, done_chapters)
+    pct = 100.0 * done_chapters / total_chapters
+    table = Table(title="长篇写作进度")
+    table.add_column("指标")
+    table.add_column("值")
+    table.add_row("目标总字数", str(target_words or "未设置"))
+    table.add_row("已写章节", str(done_chapters) + " / " + str(total_chapters) + " (%.1f%%)" % pct)
+    table.add_row("已写字数", str(written_words))
+    if target_words:
+        wc_pct = 100.0 * written_words / target_words
+        table.add_row("字数进度", "%.1f%%" % wc_pct)
+    volumes_text = proj.volumes_path.read_text(encoding="utf-8") if proj.volumes_path.exists() else ""
+    import re
+    vol_pattern = re.compile(r"##\s*(第[一二三四五六七八九十百千零0-9]+卷[：:]?[^\n]*?)\s+[^*]*?起止章节[：:]?\s*第\s*(\d+)\s*章?[-到]\s*第?\s*(\d+)\s*章", re.MULTILINE)
+    if not vol_pattern.pattern:
+        vol_pattern = re.compile(r"##\s*(第[一二三四五六七八九十百千零0-9]+卷[：:]?[^\n]+)", re.MULTILINE)
+    current_vol = "-"
+    vol_progress = "-"
+    # 简单方法：按行找 "## 第N卷" 开头
+    vol_lines = re.findall(r"##\s*第([一二三四五六七八九十百千零0-9]+)卷[：:]?([^\n]*)", volumes_text)
+    chap_to_vol = []
+    chap_pat = re.compile(r"第\s*(\d+)\s*章?\s*[-到—]\s*第?\s*(\d+)\s*章")
+    for vol_no, vol_title in vol_lines:
+        # 找紧接着的 "第X-Y章"
+        idx = volumes_text.find("## 第" + vol_no + "卷")
+        if idx < 0:
+            continue
+        seg = volumes_text[idx:idx + 500]
+        m = chap_pat.search(seg)
+        if m:
+            chap_to_vol.append((vol_no, vol_title.strip(), int(m.group(1)), int(m.group(2))))
+    for vol_no, vol_title, start, end in chap_to_vol:
+        if start <= done_chapters <= end:
+            current_vol = "第" + vol_no + "卷 " + vol_title
+            vol_pct = 100.0 * (done_chapters - start + 1) / (end - start + 1)
+            vol_progress = str(start) + "-" + str(end) + " 章: %.0f%%" % vol_pct
+            break
+    table.add_row("当前卷", current_vol)
+    table.add_row("卷内进度", vol_progress)
+    if done_chapters > 1:
+        first = chapters[0].stat().st_mtime
+        last = chapters[-1].stat().st_mtime
+        span_min = (last - first) / 60
+        if span_min > 0:
+            avg = span_min / max(1, done_chapters - 1)
+            remaining = total_chapters - done_chapters
+            est_min = avg * remaining
+            table.add_row("平均每章耗时", "%.1f 分钟" % avg)
+            table.add_row("预计剩余", "%.0f 分钟（约 %.1f 小时）" % (est_min, est_min / 60))
+    console.print(table)
+
 @app.command(name="expand-scene")
 def expand_scene_cmd(
     no: int = typer.Argument(..., help="章节号"),
