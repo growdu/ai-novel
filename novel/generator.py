@@ -458,8 +458,10 @@ def write_chapter(req, ctx, client=None, max_iters=2, do_detect=True, do_polish=
         if do_polish:
             if verbose:
                 print("[polish] 润色重写...")
-            p_msgs = P.build_polish_messages(content, chapter_ctx.chapter_plan, chapter_ctx.prev_chapter_tail, detect_report, "")
-            content = _strip_meta(client.chat(p_msgs, temperature=0.9).content)
+            feedback = "【AI 味检测】\n" + (detect_report or "（无）") + "\n\n【审稿】\n" + (review_report or "（无）")
+            p_msgs = P.build_polish_messages(content, chapter_ctx.chapter_plan, chapter_ctx.prev_chapter_tail, detect_report, feedback)
+            p_res = client.chat_with_continuation(p_msgs, target_words=req.target_words, max_total_tokens=20000, temperature=0.9)
+            content = _strip_meta(p_res.content)
             iters += 1
             history.append(("v%d_polish" % iters, content))
     return ChapterResult(

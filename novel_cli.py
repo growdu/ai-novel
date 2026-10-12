@@ -155,6 +155,40 @@ def chapter(
         console.print(Panel(res.review_report[:1500], title="审稿（节选）"))
 
 @app.command()
+def sprint(
+    until: int = typer.Option(None, "--until", "-u", help="写到第几章"),
+    count: int = typer.Option(None, "--count", "-c", help="写几章"),
+    words: int = typer.Option(None, "--words", "-w"),
+    iters: int = typer.Option(1, "--iters", "-i"),
+    no_polish: bool = typer.Option(False, "--no-polish"),
+):
+    """自动冲刺：从最后一章后面继续写若干章。"""
+    proj = S.load_project()
+    cfg = load_global()
+    chapters = proj.list_chapters()
+    last_no = 0
+    for c in chapters:
+        try:
+            n = int(c.stem)
+            if n > last_no:
+                last_no = n
+        except ValueError:
+            continue
+    start = last_no + 1
+    if until is not None:
+        end = until
+    elif count is not None:
+        end = start + count - 1
+    else:
+        console.print("[yellow]请指定 --until N 或 --count N。[/yellow]")
+        raise typer.Exit(1)
+    if end < start:
+        console.print("[yellow]没有需要写的章节（已经写到第 %d 章）。[/yellow]" % last_no)
+        return
+    console.print("[bold]冲刺：第 %d 章 -> 第 %d 章（%d 章）[/bold]" % (start, end, end - start + 1))
+    write(start=start, end=end, words=words, iters=iters, no_polish=no_polish)
+
+@app.command()
 def write(
     start: int = typer.Option(1, "--start", "-s"),
     end: int = typer.Option(1, "--end", "-e"),
