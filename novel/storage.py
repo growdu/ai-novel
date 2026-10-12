@@ -46,12 +46,20 @@ class Project:
         return self.novel_dir / "state.md"
 
     @property
+    def rolling_summary_path(self):
+        return self.novel_dir / "rolling_summary.md"
+
+    @property
     def volumes_path(self):
         return self.novel_dir / "volumes.md"
 
     @property
     def arcs_dir(self):
         return self.novel_dir / "arcs"
+
+    @property
+    def samples_dir(self):
+        return self.novel_dir / "samples"
 
     @property
     def foreshadowing_path(self):
@@ -84,6 +92,7 @@ def init_project(root, title, theme="", meta=None):
     (root / PROJECT_DIR / "history").mkdir()
     (root / PROJECT_DIR / "arcs").mkdir()
     (root / PROJECT_DIR / "reports").mkdir()
+    (root / PROJECT_DIR / "samples").mkdir(exist_ok=True)
     p = Project(root=root, title=title, meta=meta or {"theme": theme})
     _write_yaml(p.project_yaml, {"title": title, "theme": theme, **(meta or {})})
     if theme and not p.outline_path.exists():
@@ -93,6 +102,8 @@ def init_project(root, title, theme="", meta=None):
         )
     if not p.state_path.exists():
         p.state_path.write_text("# 故事状态\n\n（暂无；写完第一章后会自动生成摘要）\n", encoding="utf-8")
+    if not p.rolling_summary_path.exists():
+        p.rolling_summary_path.write_text("# 滚动摘要\n\n（暂无；每写完 5 章自动更新一次）\n", encoding="utf-8")
     if not p.world_path.exists():
         p.world_path.write_text("# 世界观\n\n（待生成；包括地理、历史、关键设定、神话、地理与时代的硬规则）\n", encoding="utf-8")
     if not p.timeline_path.exists():
@@ -133,6 +144,30 @@ def save_chapter(project, chapter_no, content, backup=True):
 def load_chapter(project, chapter_no):
     p = project.chapters_dir / ("%04d.md" % chapter_no)
     return p.read_text(encoding="utf-8") if p.exists() else None
+
+def load_titles(project):
+    import json
+    p = project.novel_dir / "titles.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def save_titles(project, titles):
+    import json
+    p = project.novel_dir / "titles.json"
+    p.write_text(json.dumps(titles, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def get_existing_titles(project):
+    titles = load_titles(project)
+    if not titles:
+        return ""
+    items = []
+    for k in sorted(titles.keys()):
+        items.append(k + ": " + titles[k])
+    return "\n".join(items)
 
 
 def chapter_word_count(text):

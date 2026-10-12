@@ -39,6 +39,18 @@ def volume():
     return _load("volume.md")
 def arc():
     return _load("arc.md")
+def consistency():
+    return _load("consistency.md")
+def samples():
+    return _load("samples.md")
+def volume_report():
+    return _load("volume_report.md")
+def rolling_summary():
+    return _load("rolling_summary.md")
+def chapter_title():
+    return _load("chapter_title.md")
+def style_radar():
+    return _load("style_radar.md")
 
 @dataclass
 class ChapterContext:
@@ -60,11 +72,15 @@ class ChapterContext:
     arc: str = ""
     chapter_index_in_volume: int = 0
     total_chapters_in_volume: int = 0
+    style_samples: str = ""
+    rolling_summary: str = ""
 
 def build_chapter_messages(ctx):
     sys_parts = [de_ai_flavour(), "", "## 你的具体任务：写一章小说", chapter()]
     if ctx.style:
         sys_parts.extend(["", "## 本项目文风", ctx.style])
+    if ctx.style_samples:
+        sys_parts.extend(["", "## 风格样本（你必须深度模仿这个语感）", ctx.style_samples, "", samples()])
     system = "\n".join(sys_parts)
     user_parts = [
         "## 小说标题：" + ctx.title,
@@ -99,6 +115,8 @@ def build_chapter_messages(ctx):
         user_parts.extend(["", "## 全书分卷（用于节奏）", ctx.volumes])
     if ctx.state:
         user_parts.extend(["", "## 上一节状态（用于跨章连贯）", ctx.state])
+    if ctx.rolling_summary:
+        user_parts.extend(["", "## 全书滚动摘要（用于全局视角）", ctx.rolling_summary])
     if ctx.foreshadow:
         user_parts.extend(["", "## 当前伏笔簿（用于埋设或回收钩子）", ctx.foreshadow])
     if ctx.arc:
@@ -160,4 +178,60 @@ def build_review_messages(content, chapter_plan, prev_tail):
     user_parts = ["## 当前章节正文", content, "", "## 本章规划", chapter_plan, "", "## 上一章结尾", prev_tail or "（这是第一章）"]
     user = _NO_THINK_HINT + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
+
+def build_consistency_messages(chapters_blob, world_blob, characters_blob):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：跨章节一致性检查\n\n" + consistency()
+    user_parts = ["## 已写章节", chapters_blob, "", "## 世界观", world_blob, "", "## 人物志", characters_blob]
+    user = _META_PREFIX + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+
+def build_volume_report_messages(volume_title, chapters_blob, outline_blob, foreshadow_blob, arc_blob):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：生成卷末报告\n\n" + volume_report()
+    user_parts = [
+        "## 当前卷：" + volume_title,
+        "",
+        "## 本卷已写章节",
+        chapters_blob or "（本卷尚未写）",
+        "",
+        "## 全书大纲（用于理解其他卷）",
+        outline_blob,
+        "",
+        "## 当前伏笔簿",
+        foreshadow_blob,
+        "",
+        "## 人物弧线总览",
+        arc_blob,
+    ]
+    user = _META_PREFIX + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+
+def build_style_radar_messages(chapter_content, samples_blob):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：风格雷达评分\n\n" + style_radar()
+    user_parts = [
+        "[重要] 直接输出评分结果，不要 think 块。\n",
+        "## 新章节正文",
+        chapter_content[:3000],
+        "",
+        "## 风格样本（参考语感）",
+        samples_blob or "（无样本）",
+    ]
+    user = _META_PREFIX + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+
+def build_chapter_title_messages(chapter_content, chapter_plan, existing_titles):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：生成章节标题\n\n" + chapter_title()
+    user_parts = [
+        "[重要] 直接输出标题一行，不要其他内容。\n",
+        "## 章节正文（用于提取核心物件/动作）",
+        chapter_content[:2000],
+        "",
+        "## 本章规划",
+        chapter_plan,
+        "",
+        "## 已用过的标题（不要重复）",
+        existing_titles or "（无）",
+    ]
+    user = _META_PREFIX + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+_META_PREFIX = "[重要] 你的任务是输出结构化的元数据，不是小说正文。直接按格式回答，不要写小说片段。\n\n"
 _NO_THINK_HINT = "\n[系统提醒] 直接输出所要求的内容，不要任何 think 块或思考性话语。\n"

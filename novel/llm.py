@@ -15,13 +15,17 @@ from .config import GlobalConfig
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```")
-_PARTIAL_THINK_RE = re.compile(r"<think>[\s\S]*?(?=\n\n##|\Z)", re.IGNORECASE)
+_PARTIAL_THINK_RE = re.compile(r"<think>[\s\S]*?(?=\n\n##|\n\n[^#]|\Z)", re.IGNORECASE)
 
 def _strip_think_tags(text):
     if not text:
         return text
     text = _THINK_TAG_RE.sub("", text)
     text = _PARTIAL_THINK_RE.sub("", text)
+    # 如果未闭合 <think> 残片还在，从 <think> 开始到结尾全部剥掉
+    if "<think>" in text:
+        idx = text.find("<think>")
+        text = text[:idx]
     return text.strip()
 
 def _try_parse_json(text):
@@ -146,6 +150,45 @@ class LLMClient:
         ]
         kwargs.setdefault("temperature", 0.95)
         return self.chat(new_msgs, **kwargs)
+
+
+    def chat_with_continuation(self, messages, target_words=1000, max_total_tokens=30000, temperature=None, verbose=False, **kwargs):
+        """能自动续写的 chat：finish_reason=length 时接着生成，最后拼接返回。"""
+        kwargs.setdefault("temperature", 0.95 if temperature is None else temperature)
+        chunks = []
+        cur_msgs = list(messages)
+        total_tokens = 0
+        iters = 0
+        last_result = None
+        while iters < 4:
+            kwargs.setdefault("max_tokens", min(max_total_tokens - total_tokens, 16000))
+            if kwargs["max_tokens"] < 1500:
+                break
+            res = self.chat(cur_msgs, **kwargs)
+            last_result = res
+            total_tokens += res.total_tokens or 0
+            chunks.append(res.content)
+            iters += 1
+            fr = res.raw.get("choices", [{}])[0].get("finish_reason", "stop") if res.raw else "stop"
+            content = res.content
+            content = _strip_think_tags(content)
+            tail_stripped = content.rstrip()
+            think_residue = "<think>" in content or " 区块" in content
+            looks_substantial = len(tail_stripped) > 800
+            looks_complete = (fr == "stop" and looks_substantial) or (tail_stripped.endswith(("。", "?", "!", "？", "！", "——")) and looks_substantial)
+            if looks_complete and not think_residue:
+                break
+            if verbose:
+                print(f"[continue] iter {iters}: len={len(content)}, fr={fr}, will continue")
+            cur_msgs = list(messages) + [Message("assistant", "\n".join(chunks))]
+            cur_msgs.append(Message("user", "接着写。不要重复、不要总结。再写大约 " + str(target_words) + " 字。"))
+            kwargs.pop("max_tokens", None)
+        merged = "\n".join(chunks)
+        if last_result is None:
+            return last_result
+        last_result.content = merged
+        last_result.raw["_continue_iters"] = iters
+        return last_result
 
     def stream_chat(self, messages, temperature=None, top_p=None, max_tokens=None):
         if self.cfg.dry_run:

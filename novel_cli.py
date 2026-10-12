@@ -146,7 +146,7 @@ def chapter(
     }
     req = G.ChapterRequest(chapter_no=no, target_words=words or cfg.target_chapter_words)
     client = LLMClient(cfg)
-    res = G.write_chapter_extended(req, ctx, project=proj, client=client, max_iters=iters, update_after=True, verbose=True)
+    res = G.write_chapter_extended(req, ctx, project=proj, client=client, max_iters=iters, update_after=True, verbose=True, do_polish=not no_polish)
     path = S.save_chapter(proj, no, res.content)
     console.print("[green]已保存[/green] %s | 字数 %d | 迭代 %d 轮" % (path, res.word_count, res.iterations))
     if res.detect_report:
@@ -189,7 +189,7 @@ def write(
         }
         req = G.ChapterRequest(chapter_no=n, target_words=words or cfg.target_chapter_words)
         console.print("\n[bold]=== 第 %d 章 ===[/bold]" % n)
-        res = G.write_chapter_extended(req, ctx, project=proj, client=client, max_iters=iters, update_after=True, verbose=True)
+        res = G.write_chapter_extended(req, ctx, project=proj, client=client, max_iters=iters, update_after=True, verbose=True, do_polish=not no_polish)
         S.save_chapter(proj, n, res.content)
         console.print("[green]已保存[/green] %s | 字数 %d | 迭代 %d 轮" % (proj.chapters_dir / ("%04d.md" % n), res.word_count, res.iterations))
 
@@ -265,6 +265,81 @@ def timeline():
     cfg = load_global()
     G.generate_timeline(proj, client=LLMClient(cfg))
     console.print("[green]已保存[/green] " + str(proj.timeline_path))
+
+@app.command()
+def volume_report(volume: int = typer.Option(1, "--volume", "-v", help="第几卷")):
+    """生成指定卷的卷末报告。"""
+    proj = S.load_project()
+    cfg = load_global()
+    G.generate_volume_report(proj, client=LLMClient(cfg), volume_no=volume)
+    console.print("[green]已保存[/green] " + str(proj.novel_dir / "reports" / ("volume_%02d_report.md" % volume)))
+
+@app.command()
+def radar(no: int = typer.Argument(..., help="章节号")):
+    """风格雷达：量化某章与 samples 的风格相似度。"""
+    proj = S.load_project()
+    cfg = load_global()
+    res = G.style_radar(proj, no, client=LLMClient(cfg))
+    if res:
+        console.print(Panel(res, title="第 %d 章风格雷达" % no))
+    else:
+        console.print("[red]第 %d 章不存在。[/red]" % no)
+
+@app.command()
+def history():
+    """查看所有章节的版本历史与字数变化。"""
+    proj = S.load_project()
+    if not proj.history_dir.exists():
+        console.print("[yellow]暂无历史。[/yellow]")
+        return
+    files = sorted(proj.history_dir.glob("chapter_*.md"))
+    table = Table(title="写作历史")
+    table.add_column("章号")
+    table.add_column("版本")
+    table.add_column("字数")
+    table.add_column("时间")
+    for f in files:
+        name = f.stem
+        parts = name.split("_")
+        chapter = parts[1] if len(parts) > 1 else "?"
+        ver = parts[2] if len(parts) > 2 else "?"
+        try:
+            text = f.read_text(encoding="utf-8")
+            wc = S.chapter_word_count(text)
+        except Exception:
+            wc = 0
+        mtime = f.stat().st_mtime
+        import time
+        mtime_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
+        table.add_row(chapter, ver, str(wc), mtime_str)
+    console.print(table)
+
+@app.command()
+def title(no: int = typer.Argument(..., help="章节号"), force: bool = typer.Option(False, "--force", help="重新生成")):
+    """为指定章节生成标题。"""
+    proj = S.load_project()
+    cfg = load_global()
+    t = G.generate_chapter_title(proj, no, client=LLMClient(cfg), force=force)
+    if t:
+        console.print("[green]第 %d 章标题:[/green] %s" % (no, t))
+    else:
+        console.print("[red]第 %d 章不存在。[/red]" % no)
+
+@app.command()
+def rolling():
+    """手动刷新全书滚动摘要。"""
+    proj = S.load_project()
+    cfg = load_global()
+    G.update_rolling_summary(proj, client=LLMClient(cfg))
+    console.print("[green]已保存[/green] " + str(proj.rolling_summary_path))
+
+@app.command()
+def check(lookback: int = typer.Option(10, "--lookback", "-k")):
+    """跨章节一致性检查。"""
+    proj = S.load_project()
+    cfg = load_global()
+    G.check_consistency(proj, client=LLMClient(cfg), lookback=lookback)
+    console.print("[green]已保存[/green] " + str(proj.novel_dir / "consistency_report.md"))
 
 @app.command()
 def state():

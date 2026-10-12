@@ -11,7 +11,18 @@ try:
 
     load_dotenv()
 except ImportError:
-    pass
+    def _manual_load_env():
+        p = Path.cwd()
+        for cand in [p / ".env", p.parent / ".env"]:
+            if cand.exists():
+                for line in cand.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+                return
+    _manual_load_env()
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -72,7 +83,17 @@ class GlobalConfig:
 
 
 def load_global() -> GlobalConfig:
-    """加载全局配置。每次调用都会重新读取环境变量，方便测试。"""
+    """加载全局配置：每次调用都重新读取 .env（不依赖 dotenv 包）。"""
+    p = Path.cwd()
+    for cand in [p / ".env", p.parent / ".env"]:
+        if cand.exists():
+            for line in cand.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ[k.strip()] = v.strip()
+            break
     return GlobalConfig()
 
 
