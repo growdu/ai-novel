@@ -1,6 +1,23 @@
 # Novel Writer —— AI 写小说 CLI
-基于大模型（默认 minimax Text-01，兼容 OpenAI Chat Completions 协议）的小说自动创作工具。
+基于大模型（默认 minimax-M3，兼容 OpenAI Chat Completions 协议）的小说自动创作工具。
 核心目标：把大纲、主题、人物、字数、文风交给程序，让它自己出稿，并通过多轮审稿与润色，最大程度减少 AI 味。
+
+## 能力速览（25 个命令）
+| 类别 | 命令 |
+|---|---|
+| 基础 | init / status / config / progress / doctor |
+| 规划 | outline / characters / world / volumes / plan |
+| 写作 | chapter / write / sprint / continue / chat / expand-scene |
+| 润色 | polish / detect / radar |
+| 一致性 | check / timeline / state / rolling / foreshadow / arc / volume-report / title / history |
+
+## 特性
+- **真实长篇工作流**：20 万字长篇已实测（4 章 12K 字 + 自动维护 state / foreshadow / arc / timeline / title）
+- **minimax-M3 适配**：处理推理模型 think 标签，chat_with_continuation 自动续写避免截断
+- **去 AI 味道**：6 维度风格雷达量化（与样本相似度 86+）
+- **跨章一致性**：自动检测人物名 / 时间 / 地点 / 设定漂移
+- **可移植**：兼容任意 OpenAI 协议（OpenAI / DeepSeek / 智谱 / 通义）
+- **DRY_RUN 模式**：不调 API 完整打印提示词
 # 特性
 - 完整工作流：init / outline / characters / chapter / write / polish / detect / status
 - 去 AI 味优先：核心提示词 de_ai_flavour.md 是项目灵魂，明确列出禁用表达、写作原则、作家风格参考
