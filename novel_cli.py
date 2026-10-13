@@ -526,6 +526,49 @@ def prompt(
 
 
 @app.command()
+def gaps():
+    """列出所有未回收的伏笔，及其预计回收章节是否已过。"""
+    import re as _re
+    proj = S.load_project()
+    text = proj.foreshadowing_path.read_text(encoding="utf-8") if proj.foreshadowing_path.exists() else ""
+    if not text:
+        console.print("[yellow]伏笔簿为空。[/yellow]")
+        return
+    chapters = proj.list_chapters()
+    last_no = max(int(c.stem) for c in chapters) if chapters else 0
+    # 匹配 [FN] 之后跨多行，包含"回收"和"第N章"
+    pattern = _re.compile(r"\[F(\d+)\][\s\S]{0,200}?回收[：:]?[\s\S]{0,40}?第\s*(\d+)\s*章")
+    overdue = []
+    upcoming = []
+    fulfilled = []
+    for m in pattern.finditer(text):
+        n = int(m.group(1))
+        try:
+            target = int(m.group(2))
+        except ValueError:
+            continue
+        if target <= last_no:
+            fulfilled.append((n, target))
+        else:
+            upcoming.append((n, target))
+    open_pattern = _re.compile(r"\[F(\d+)\][^。\n]*?未回收", _re.MULTILINE)
+    for m in open_pattern.finditer(text):
+        n = int(m.group(1))
+        overdue.append(n)
+    table = Table(title="伏笔状态")
+    table.add_column("状态")
+    table.add_column("条数")
+    table.add_column("F 编号")
+    table.add_row("[red]未回收（应当回收）[/red]", str(len(overdue)), ", ".join("F" + str(x) for x in overdue))
+    table.add_row("[yellow]待回收（尚未到章节）[/yellow]", str(len(upcoming)), ", ".join("F" + str(x) + "(到" + str(t) + "章)" for x, t in upcoming))
+    table.add_row("[green]已到回收章节[/green]", str(len(fulfilled)), ", ".join("F" + str(x) + "(目标" + str(t) + "章)" for x, t in fulfilled))
+    console.print(table)
+    if overdue:
+        console.print("\n[red]警告：以下伏笔已过预计回收章节：[/red]")
+        for n in overdue:
+            console.print("  F" + str(n))
+
+@app.command()
 def index():
     """列出所有章节的索引（章节号、标题、字数、状态）。"""
     proj = S.load_project()
