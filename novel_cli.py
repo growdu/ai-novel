@@ -1012,12 +1012,32 @@ def state():
     console.print("[green]已保存[/green] " + str(proj.state_path))
 
 @app.command()
-def arc():
-    """刷新人物弧线总览。"""
+def arc(
+    character: str = typer.Option(None, "--char", "-c", help="指定查看某个人物"),
+    only: bool = typer.Option(False, "--only", help="只显示指定人物"),
+):
+    """刷新人物弧线总览（也可指定查看某个人物）。"""
     proj = S.load_project()
     cfg = load_global()
     G.update_arc(proj, client=LLMClient(cfg))
-    console.print("[green]已保存[/green] " + str(proj.arcs_dir / "_overview.md"))
+    overview = proj.arcs_dir / "_overview.md"
+    console.print("[green]已保存[/green] " + str(overview))
+    if character:
+        text = overview.read_text(encoding="utf-8")
+        if only:
+            import re as _re
+            pattern = _re.compile(r"^##\s+" + _re.escape(character) + "\s*$([\s\S]*?)(?=^##\s+|\Z)", _re.MULTILINE)
+            m = pattern.search(text)
+            if m:
+                console.print(Panel(m.group(1).strip(), title=character + " 弧线"))
+            else:
+                console.print("[yellow]未找到人物 " + character + "[/yellow]")
+        else:
+            for line in text.splitlines():
+                if character in line:
+                    console.print(line, style="bold")
+                else:
+                    console.print(line)
 
 @app.command()
 def foreshadow():
