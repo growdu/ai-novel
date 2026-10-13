@@ -533,11 +533,27 @@ def fanfic(
 
 @app.command()
 def genres():
-    """列出所有支持的题材。"""
+    """列出所有支持的题材（严肃向）。"""
     from novel.prompts import list_genres
-    console.print("[bold]支持的题材[/bold]（10 个）")
+    console.print("[bold]支持的题材（严肃向，10 个）[/bold]")
     for g in list_genres():
         console.print("  - " + g)
+
+@app.command(name="webnovel-genres")
+def webnovel_genres_cmd():
+    """列出所有支持的网文题材（9 个）。"""
+    from novel.prompts import list_webnovel_genres
+    console.print("[bold]支持的网文题材（9 个）[/bold]")
+    for g in list_webnovel_genres():
+        console.print("  - " + g)
+
+@app.command(name="webnovel-styles")
+def webnovel_styles_cmd():
+    """列出所有支持的网文爽感文风（10 个）。"""
+    from novel.prompts import list_webnovel_styles
+    console.print("[bold]支持的网文爽感文风（10 个）[/bold]")
+    for s in list_webnovel_styles():
+        console.print("  - " + s)
 
 @app.command(name="styles")
 def styles_cmd():

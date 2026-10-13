@@ -56,6 +56,10 @@ def fanfic():
     return _load("fanfic.md")
 def skeleton():
     return _load("skeleton.md")
+def webnovel_genres():
+    return _load("webnovel_genres.md")
+def webnovel_style():
+    return _load("webnovel_style.md")
 def rolling_summary():
     return _load("rolling_summary.md")
 def chapter_title():
@@ -344,6 +348,44 @@ def list_genres():
 def list_styles():
     text = style_presets()
     return [m for m in _GENRE_HEAD_RE.findall(text) if m not in _TOTAL_TITLES]
+
+_WEB_TOTAL_TITLES = {"网文题材硬规则与爽点设定", "网文爽感文风", "通用爽点节奏", "通用网文节奏"}
+
+def list_webnovel_genres():
+    text = webnovel_genres()
+    return [m for m in _GENRE_HEAD_RE.findall(text) if m not in _WEB_TOTAL_TITLES]
+
+def list_webnovel_styles():
+    text = webnovel_style()
+    return [m for m in _GENRE_HEAD_RE.findall(text) if m not in _WEB_TOTAL_TITLES]
+
+def get_webnovel_genre_block(genre):
+    if not genre:
+        return ""
+    text = webnovel_genres()
+    titles = list_webnovel_genres()
+    matched = _match_title(genre, titles)
+    if not matched:
+        return ""
+    pattern = re.compile(r"^#\s+" + re.escape(matched) + r"\s*$\n(.*?)(?=^#\s+|\Z)", re.MULTILINE | re.DOTALL)
+    m = pattern.search(text)
+    if m:
+        return "[网文题材爽点设定] " + matched + "\n" + m.group(1).strip()
+    return ""
+
+def get_webnovel_style_block(style):
+    if not style:
+        return ""
+    text = webnovel_style()
+    titles = list_webnovel_styles()
+    matched = _match_title(style, titles)
+    if not matched:
+        return ""
+    pattern = re.compile(r"^#\s+" + re.escape(matched) + r"\s*$\n(.*?)(?=^#\s+|\Z)", re.MULTILINE | re.DOTALL)
+    m = pattern.search(text)
+    if m:
+        return "[网文爽感文风] " + matched + "\n" + m.group(1).strip()
+    return ""
 
 def get_genre_block(genre):
     if not genre:
