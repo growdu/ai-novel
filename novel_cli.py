@@ -52,24 +52,39 @@ def init(
     name: str = typer.Argument(..., help="小说项目目录名"),
     title: str = typer.Option(None, "--title", "-t"),
     theme: str = typer.Option("", "--theme"),
-    style: str = typer.Option("", "--style"),
+    style: str = typer.Option("", "--style", "-s", help="文风：可写预设名如'搞笑' / '冷峻' / '诗意'，或自由描述"),
     words: int = typer.Option(30000, "--words", "-w"),
-    genre: str = typer.Option("现实", "--genre", "-g"),
+    genre: str = typer.Option("现实 / 严肃文学", "--genre", "-g", help="题材：玄幻/仙侠/科幻/悬疑/推理/言情/历史/武侠/都市/校园/现实/严肃文学"),
     here: bool = typer.Option(False, "--here"),
 ):
     """初始化一个新的小说项目。"""
+    from novel.prompts import list_genres, list_styles, get_genre_block, get_style_block
+    if genre in ("现实", "严肃文学"):
+        genre = "现实 / 严肃文学"
+    style_block = get_style_block(style) if style else ""
+    style_hint = style if (style and not style_block) else ""
     target = Path.cwd() if here else Path.cwd() / name
     if target.exists() and not here and any(target.iterdir()):
         console.print("[red]目录 %s 不为空，请换名字或加 --here。[/red]" % target)
         raise typer.Exit(1)
     target.mkdir(parents=True, exist_ok=True)
-    proj = S.init_project(target, title or name, theme=theme, meta={"genre": genre, "target_words": words})
-    if style:
-        proj.style_path.write_text("# 文风\n\n" + style + "\n", encoding="utf-8")
+    meta = {"genre": genre, "target_words": words, "style_preset": style if (style and style_block) else ""}
+    proj = S.init_project(target, title or name, theme=theme, meta=meta)
+    style_content = "# 文风\n\n"
+    if style_block:
+        style_content += style_block + "\n\n"
+    if style_hint:
+        style_content += "## 自由文风描述\n\n" + style_hint + "\n"
+    if style_block or style_hint:
+        proj.style_path.write_text(style_content, encoding="utf-8")
     else:
-        proj.style_path.write_text("# 文风\n\n（待填写，可写：致敬某某、目标读者、参考作家）\n", encoding="utf-8")
+        proj.style_path.write_text("# 文风\n\n（待填写）\n", encoding="utf-8")
     proj.characters_path.write_text("# 人物志\n\n（待生成）\n", encoding="utf-8")
-    console.print(Panel.fit("[green]已创建项目:[/green] %s\n[green]标题:[/green] %s\n[green]主题:[/green] %s" % (proj.root, proj.title, theme or "（未填）"), title="novel init"))
+    if genre:
+        g_file = proj.novel_dir / "genre_preset.md"
+        g_block = get_genre_block(genre)
+        g_file.write_text("# 当前题材: " + genre + "\n\n" + g_block + "\n", encoding="utf-8")
+    console.print(Panel.fit("[green]已创建项目:[/green] %s\n[green]标题:[/green] %s\n[green]题材:[/green] %s\n[green]文风:[/green] %s" % (proj.root, proj.title, genre, style or "（默认）"), title="novel init"))
 
 @app.command()
 def outline(
@@ -127,6 +142,7 @@ def chapter(
     outline_text = proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else ""
     characters_text = proj.characters_path.read_text(encoding="utf-8") if proj.characters_path.exists() else ""
     style = proj.style_path.read_text(encoding="utf-8") if proj.style_path.exists() else ""
+    genre = proj.meta.get("genre", "")
     plan = G.parse_chapter_plan(outline_text, no)
     prev = S.load_chapter(proj, no - 1)
     prev_tail = prev[-500:] if prev else ""
@@ -135,6 +151,7 @@ def chapter(
         "outline": outline_text,
         "characters": characters_text,
         "style": style,
+        "genre": genre,
         "chapter_plan": plan,
         "prev_chapter_tail": prev_tail,
         "state": proj.state_path.read_text(encoding="utf-8") if proj.state_path.exists() else "",
@@ -202,6 +219,7 @@ def write(
     outline_text = proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else ""
     characters_text = proj.characters_path.read_text(encoding="utf-8") if proj.characters_path.exists() else ""
     style = proj.style_path.read_text(encoding="utf-8") if proj.style_path.exists() else ""
+    genre = proj.meta.get("genre", "")
     client = LLMClient(cfg)
     for n in range(start, end + 1):
         plan = G.parse_chapter_plan(outline_text, n)
@@ -634,6 +652,8 @@ def retry_stuck(
             "outline": proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else "",
             "characters": proj.characters_path.read_text(encoding="utf-8") if proj.characters_path.exists() else "",
             "style": proj.style_path.read_text(encoding="utf-8") if proj.style_path.exists() else "",
+            "genre": proj.meta.get("genre", ""),
+                "genre": proj.meta.get("genre", ""),
             "chapter_plan": G.parse_chapter_plan(proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else "", n),
             "prev_chapter_tail": (S.load_chapter(proj, n - 1) or "")[-500:],
             "state": proj.state_path.read_text(encoding="utf-8") if proj.state_path.exists() else "",

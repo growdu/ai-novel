@@ -471,6 +471,7 @@ def write_chapter(req, ctx, client=None, max_iters=2, do_detect=True, do_polish=
         chapter_index_in_volume=ctx.get("chapter_index_in_volume", 0),
         total_chapters_in_volume=ctx.get("total_chapters_in_volume", 0),
         style_samples=ctx.get("style_samples", ""),
+        genre=ctx.get("genre", ""),
     )
     msgs = P.build_chapter_messages(chapter_ctx)
     # 人物名强制表：注入到 system 提示词

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+import re
 from .llm import Message
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -45,6 +46,10 @@ def samples():
     return _load("samples.md")
 def volume_report():
     return _load("volume_report.md")
+def genre_presets():
+    return _load("genre_presets.md")
+def style_presets():
+    return _load("style_presets.md")
 def rolling_summary():
     return _load("rolling_summary.md")
 def chapter_title():
@@ -82,6 +87,7 @@ class ChapterContext:
     total_chapters_in_volume: int = 0
     style_samples: str = ""
     rolling_summary: str = ""
+    genre: str = ""  # 题材（用于注入硬规则）
 
 def build_chapter_messages(ctx):
     sys_parts = [de_ai_flavour(), "", "## 你的具体任务：写一章小说", chapter()]
@@ -140,6 +146,9 @@ def build_chapter_messages(ctx):
 
 def build_outline_messages(title, theme, genre, target_words, characters, extra):
     sys = de_ai_flavour() + "\n\n## 你的具体任务：生成或完善小说大纲\n\n" + outline()
+    genre_block = get_genre_block(genre)
+    if genre_block:
+        sys = sys + "\n\n" + genre_block
     user_parts = [
         "## 标题：" + title,
         "## 主题：" + theme,
@@ -319,4 +328,64 @@ def build_chapter_title_messages(chapter_content, chapter_plan, existing_titles)
     user = _META_PREFIX + "\n".join(user_parts)
     return [Message("system", sys), Message("user", user)]
 _META_PREFIX = "[重要] 你的任务是输出结构化的元数据，不是小说正文。直接按格式回答，不要写小说片段。\n\n"
+_GENRE_HEAD_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
+_TOTAL_TITLES = {"题材硬规则与常见设定", "文风预设", "通用建议"}
+
+def list_genres():
+    text = genre_presets()
+    return [m for m in _GENRE_HEAD_RE.findall(text) if m not in _TOTAL_TITLES]
+
+def list_styles():
+    text = style_presets()
+    return [m for m in _GENRE_HEAD_RE.findall(text) if m not in _TOTAL_TITLES]
+
+def get_genre_block(genre):
+    if not genre:
+        return ""
+    text = genre_presets()
+    titles = list_genres()
+    matched = _match_title(genre, titles)
+    if not matched:
+        return ""
+    pattern = re.compile(r"^#\s+" + re.escape(matched) + r"\s*$\n(.*?)(?=^#\s+|\Z)", re.MULTILINE | re.DOTALL)
+    m = pattern.search(text)
+    if m:
+        return "[题材硬规则] " + matched + "\n" + m.group(1).strip()
+    return ""
+
+def get_style_block(style):
+    if not style:
+        return ""
+    text = style_presets()
+    titles = list_styles()
+    matched = _match_title(style, titles)
+    if not matched:
+        return ""
+    pattern = re.compile(r"^#\s+" + re.escape(matched) + r"\s*$\n(.*?)(?=^#\s+|\Z)", re.MULTILINE | re.DOTALL)
+    m = pattern.search(text)
+    if m:
+        return "[文风指南] " + matched + "\n" + m.group(1).strip()
+    return ""
+
+def _match_title(query, titles):
+        """匹配标题：精确 -> 包含 / 前缀 / 模糊"""
+        if query in titles:
+            return query
+        for t in titles:
+            if query in t or t in query:
+                return t
+        # 取最长公共前缀
+        best = ""
+        for t in titles:
+            i = 0
+            while i < len(query) and i < len(t) and query[i] == t[i]:
+                i += 1
+            if i > len(best):
+                best = t[:i]
+        if len(best) >= 2:
+            for t in titles:
+                if t.startswith(best):
+                    return t
+        return ""
+
 _NO_THINK_HINT = "\n[系统提醒] 直接输出所要求的内容，不要任何 think 块或思考性话语。\n"
