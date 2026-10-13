@@ -525,6 +525,37 @@ def prompt(
     console.print("使用 --show 查看内容，--edit 编辑，--reset 恢复默认。")
 
 
+@app.command()
+def index():
+    """列出所有章节的索引（章节号、标题、字数、状态）。"""
+    proj = S.load_project()
+    titles = S.load_titles(proj)
+    chapters = proj.list_chapters()
+    if not chapters:
+        console.print("[yellow]暂无章节。[/yellow]")
+        return
+    table = Table(title="全书索引")
+    table.add_column("章节")
+    table.add_column("标题")
+    table.add_column("字数")
+    table.add_column("状态")
+    total = 0
+    for c in chapters:
+        n = int(c.stem)
+        text = c.read_text(encoding="utf-8")
+        wc = S.chapter_word_count(text)
+        total += wc
+        title = titles.get("%04d" % n, "（无）")
+        if wc < 100:
+            status = "[red]异常[/red]"
+        elif "<think>" in text or " 区块" in text:
+            status = "[red]残片[/red]"
+        else:
+            status = "[green]正常[/green]"
+        table.add_row(str(n), title, str(wc), status)
+    table.add_row("", "[bold]总计[/bold]", "[bold]" + str(total) + "[/bold]", "")
+    console.print(table)
+
 @app.command(name="retry-stuck")
 def retry_stuck(
     threshold: int = typer.Option(100, "--threshold", help="字数低于此视为异常"),
