@@ -146,6 +146,19 @@ index：全书索引表（章节、标题、字数、状态）
 gaps：伏笔状态表（未回收/待回收/已到章节）
 auto-retry：章节空内容自动重试 2 次（解决 5 截断问题）
 
+## 5.10 v0.10 题材/文风系统（commits 602e42, 13ec09b）
+之前：genre 是字符串、style 是自由文本，prompt 完全不用。
+现在：
+- prompts/genre_presets.md：10 个题材（玄幻/仙侠/科幻/悬疑/言情/历史/武侠/都市/校园/现实）
+  每个含硬规则、常见设定、容易翻车、作家参考
+- prompts/style_presets.md：11 个文风（搞笑/轻松/伤感/诗意/冷峻/热烈/朴素/华丽/紧张/黑色幽默/儿童）
+  每个含语言特征、写作时注意、作家参考
+- novel/prompts.py：list_genres/list_styles + 智能匹配（精确 -> 包含 -> 前缀）
+- novel_cli.py init：完整 --genre/--style 选项
+- 自动注入：build_chapter_messages / build_outline_messages 把 genre 硬规则加入 system prompt
+- 自动存档：.novel/genre_preset.md 保存选中的题材硬规则
+- novel genres / novel styles 命令：查询所有支持预设
+
 # 6. 已知问题与限制
 
 ## 6.1 think 截断
