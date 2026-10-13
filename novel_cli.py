@@ -429,6 +429,22 @@ def doctor():
     if ok and not issues and not warnings:
         console.print("\n[green]✓ " + ok[0] + "[/green]")
 
+@app.command()
+def genres():
+    """列出所有支持的题材。"""
+    from novel.prompts import list_genres
+    console.print("[bold]支持的题材[/bold]（10 个）")
+    for g in list_genres():
+        console.print("  - " + g)
+
+@app.command(name="styles")
+def styles_cmd():
+    """列出所有支持的文风。"""
+    from novel.prompts import list_styles
+    console.print("[bold]支持的文风[/bold]（11 个）")
+    for s in list_styles():
+        console.print("  - " + s)
+
 @app.command(name="progress")
 def progress():
     """长篇写作进度统计：字数、章节数、卷进度、估计完成时间。"""
