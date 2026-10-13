@@ -12,7 +12,10 @@
 | 一致性 | check / timeline / state / rolling / foreshadow / arc / volume-report / title / history |
 
 ## 特性
-- **真实长篇工作流**：20 万字长篇已实测（4 章 12K 字 + 自动维护 state / foreshadow / arc / timeline / title）
+- **真实长篇工作流**：20 万字长篇已实测（7 章 50K 字 + 自动维护 state / foreshadow / arc / timeline / title）
+- **题材/文风系统**：10 个题材预设（玄幻/仙侠/科幻/悬疑/言情/历史/武侠/都市/校园/现实）
+  + 11 个文风预设（搞笑/轻松/伤感/诗意/冷峻/热烈/朴素/华丽/紧张/黑色幽默/儿童）
+  每个预设都自动注入硬规则和作家参考
 - **minimax-M3 适配**：处理推理模型 think 标签，chat_with_continuation 自动续写避免截断
 - **去 AI 味道**：6 维度风格雷达量化（与样本相似度 86+）
 - **跨章一致性**：自动检测人物名 / 时间 / 地点 / 设定漂移
