@@ -139,6 +139,13 @@ rollback：章节回滚到任意历史版本（回滚前自动备份）
 fix：检测异常章节（0 字节、含 think 残片）
 audit：全项目综合审计表
 
+## 5.9 v0.9 输出与追踪（commits a483b2c, 31a32c7, b7f0538, d9a629d, cac6ca2）
+export：合并所有章节为单一书稿（book.md / book.txt）
+retry-stuck：自动检测并重写 0 字节/残片章节
+index：全书索引表（章节、标题、字数、状态）
+gaps：伏笔状态表（未回收/待回收/已到章节）
+auto-retry：章节空内容自动重试 2 次（解决 5 截断问题）
+
 # 6. 已知问题与限制
 
 ## 6.1 think 截断
