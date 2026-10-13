@@ -525,6 +525,57 @@ def prompt(
     console.print("使用 --show 查看内容，--edit 编辑，--reset 恢复默认。")
 
 
+@app.command(name="retry-stuck")
+def retry_stuck(
+    threshold: int = typer.Option(100, "--threshold", help="字数低于此视为异常"),
+    dry: bool = typer.Option(False, "--dry", help="只列出异常章节不重写"),
+    iters: int = typer.Option(1, "--iters", "-i"),
+):
+    """检测并自动重写异常章节（0 字节 / 残片 / 字数过少）。"""
+    proj = S.load_project()
+    cfg = load_global()
+    stuck = G.find_stuck_chapters(proj, threshold=threshold)
+    if not stuck:
+        console.print("[green]所有章节均正常。[/green]")
+        return
+    console.print("[bold]发现 " + str(len(stuck)) + " 个异常章节：[/bold]")
+    for n, wc, text in stuck:
+        flag = "（含 think 残片）" if "<think>" in text or " 区块" in text else ""
+        console.print("  第 " + str(n) + " 章: " + str(wc) + " 字 " + flag)
+    if dry:
+        return
+    console.print("\n开始重写...")
+    client = LLMClient(cfg)
+    for n, wc, text in stuck:
+        target = proj.chapters_dir / ("%04d.md" % n)
+        if target.exists() and text:
+            S.save_chapter(proj, n, text, backup=True)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        console.print("\n[bold]重写第 " + str(n) + " 章...[/bold]")
+        ctx = {
+            "title": proj.title,
+            "outline": proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else "",
+            "characters": proj.characters_path.read_text(encoding="utf-8") if proj.characters_path.exists() else "",
+            "style": proj.style_path.read_text(encoding="utf-8") if proj.style_path.exists() else "",
+            "chapter_plan": G.parse_chapter_plan(proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else "", n),
+            "prev_chapter_tail": (S.load_chapter(proj, n - 1) or "")[-500:],
+            "state": proj.state_path.read_text(encoding="utf-8") if proj.state_path.exists() else "",
+            "foreshadow": proj.foreshadowing_path.read_text(encoding="utf-8") if proj.foreshadowing_path.exists() else "",
+            "world": proj.world_path.read_text(encoding="utf-8") if proj.world_path.exists() else "",
+            "timeline": proj.timeline_path.read_text(encoding="utf-8") if proj.timeline_path.exists() else "",
+            "volumes": proj.volumes_path.read_text(encoding="utf-8") if proj.volumes_path.exists() else "",
+            "arc": (proj.arcs_dir / "_overview.md").read_text(encoding="utf-8") if (proj.arcs_dir / "_overview.md").exists() else "",
+        }
+        req = G.ChapterRequest(chapter_no=n, target_words=cfg.target_chapter_words)
+        res = G.write_chapter_extended(req, ctx, project=proj, client=client, max_iters=iters, update_after=False, verbose=True)
+        S.save_chapter(proj, n, res.content)
+        new_wc = S.chapter_word_count(res.content)
+        console.print("[green]已重写第 " + str(n) + " 章，新字数 " + str(new_wc) + "[/green]")
+    console.print("\n[bold]重写完成。建议跑 novel audit 再次确认。[/bold]")
+
 @app.command()
 def export(
     fmt: str = typer.Option("md", "--format", "-f", help="md 或 txt"),

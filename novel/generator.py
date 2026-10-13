@@ -42,6 +42,17 @@ def load_style_samples(project, max_samples=2, max_chars=2000):
         return ""
     return "[重要] 以下是作者手写的风格样本片段，你必须深度模仿这个语感来写本次章节。\n\n" + "\n\n---\n\n".join(blobs)
 
+def find_stuck_chapters(project, threshold=100):
+    """找出异常的章节（字数过少或包含 think 残片）。"""
+    stuck = []
+    for c in project.list_chapters():
+        n = int(c.stem)
+        text = c.read_text(encoding="utf-8")
+        wc = S.chapter_word_count(text)
+        if wc < threshold or "<think>" in text or " 区块" in text or ("OK so" in text[:200] or "Let me" in text[:200]):
+            stuck.append((n, wc, text))
+    return stuck
+
 def export_combined(project, fmt="md", output_path=None):
     """合并所有章节为单一文件。"""
     chapters = project.list_chapters()
