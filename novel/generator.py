@@ -42,6 +42,27 @@ def load_style_samples(project, max_samples=2, max_chars=2000):
         return ""
     return "[重要] 以下是作者手写的风格样本片段，你必须深度模仿这个语感来写本次章节。\n\n" + "\n\n---\n\n".join(blobs)
 
+def extract_skeleton(source_info, client=None):
+    """从源小说信息中提取纯骨架。"""
+    client = client or LLMClient(GlobalConfig())
+    msgs = P.build_skeleton_messages(source_info)
+    res = client.chat_with_continuation(msgs, target_words=600, max_total_tokens=10000, temperature=0.4)
+    return (res.content or "").strip()
+
+def adapt_novel(source_info, direction, target_genre, target_style, client=None, skeleton_text=""):
+    """改编：基于源小说信息 + 改编方向 + 目标题材文风，输出新小说骨架。"""
+    client = client or LLMClient(GlobalConfig())
+    msgs = P.build_adapt_messages(source_info, skeleton_text, direction, target_genre, target_style)
+    res = client.chat_with_continuation(msgs, target_words=2000, max_total_tokens=20000, temperature=0.7)
+    return (res.content or "").strip()
+
+def write_fanfic(source_info, ending_state, character, era, target_words, client=None):
+    """写后传 / 番外 / 同人。"""
+    client = client or LLMClient(GlobalConfig())
+    msgs = P.build_fanfic_messages(source_info, ending_state, character, era, target_words)
+    res = client.chat_with_continuation(msgs, target_words=target_words, max_total_tokens=30000, temperature=0.95)
+    return (res.content or "").strip()
+
 def find_stuck_chapters(project, threshold=100):
     """找出异常的章节（字数过少或包含 think 残片）。"""
     stuck = []

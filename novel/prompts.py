@@ -50,6 +50,12 @@ def genre_presets():
     return _load("genre_presets.md")
 def style_presets():
     return _load("style_presets.md")
+def adapt():
+    return _load("adapt.md")
+def fanfic():
+    return _load("fanfic.md")
+def skeleton():
+    return _load("skeleton.md")
 def rolling_summary():
     return _load("rolling_summary.md")
 def chapter_title():
@@ -387,5 +393,35 @@ def _match_title(query, titles):
                 if t.startswith(best):
                     return t
         return ""
+
+
+def build_skeleton_messages(source_info):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：提取小说骨架\n\n" + skeleton()
+    user = "[重要] 输出结构化骨架，不是小说正文。\n\n## 源小说信息\n" + source_info
+    return [Message("system", sys), Message("user", user)]
+
+def build_adapt_messages(source_info, skeleton_text, direction, target_genre, target_style):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：小说改编\n\n" + adapt()
+    gb = get_genre_block(target_genre) if target_genre else ""
+    sb = get_style_block(target_style) if target_style else ""
+    if gb:
+        sys = sys + "\n\n" + gb
+    if sb:
+        sys = sys + "\n\n" + sb
+    user_parts = ["[重要] 输出结构化改编方案，不是小说正文。\n"]
+    if source_info:
+        user_parts.extend(["## 源小说信息", source_info, ""])
+    if skeleton_text:
+        user_parts.extend(["## 源小说骨架（已提取）", skeleton_text, ""])
+    user_parts.extend(["## 改编方向", direction or "换名 + 换壳（保留主线，更换题材与人物名）", "", "## 目标题材", target_genre or "（与源不同）", "", "## 目标文风", target_style or "（与源不同）"])
+    user = _META_PREFIX + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+
+def build_fanfic_messages(source_info, ending_state, character, era, target_words):
+    sys = de_ai_flavour() + "\n\n## 你的具体任务：后传 / 番外 / 同人\n\n" + fanfic()
+    user_parts = ["[重要] 输出小说正文，按源小说风格写作。\n", "## 源小说", source_info, "", "## 结尾状态", ending_state or "（未提供）", "", "## 视角人物", character or "主角", "", "## 故事时机", era or "后传：源小说结束后 5 年", "", "## 目标字数", str(target_words) if target_words else "3000"]
+    user = _NO_THINK_HINT + "\n".join(user_parts)
+    return [Message("system", sys), Message("user", user)]
+
 
 _NO_THINK_HINT = "\n[系统提醒] 直接输出所要求的内容，不要任何 think 块或思考性话语。\n"
