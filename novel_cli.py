@@ -526,6 +526,20 @@ def prompt(
 
 
 @app.command()
+def export(
+    fmt: str = typer.Option("md", "--format", "-f", help="md 或 txt"),
+    output: str = typer.Option(None, "--output", "-o", help="输出路径"),
+):
+    """合并所有章节为单一文件（书稿）。"""
+    proj = S.load_project()
+    out = G.export_combined(proj, fmt=fmt, output_path=Path(output) if output else None)
+    if out is None:
+        console.print("[yellow]没有章节可导出。[/yellow]")
+    else:
+        size = out.stat().st_size
+        console.print("[green]已导出[/green] " + str(out) + " (" + str(size) + " 字节)")
+
+@app.command()
 def audit(
     start: int = typer.Option(1, "--start", "-s", help="起始章节"),
     end: int = typer.Option(None, "--end", "-e", help="结束章节（默认最后一章）"),

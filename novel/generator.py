@@ -42,6 +42,36 @@ def load_style_samples(project, max_samples=2, max_chars=2000):
         return ""
     return "[重要] 以下是作者手写的风格样本片段，你必须深度模仿这个语感来写本次章节。\n\n" + "\n\n---\n\n".join(blobs)
 
+def export_combined(project, fmt="md", output_path=None):
+    """合并所有章节为单一文件。"""
+    chapters = project.list_chapters()
+    if not chapters:
+        return None
+    titles = S.load_titles(project)
+    if output_path is None:
+        ext = ".md" if fmt == "md" else ".txt"
+        output_path = project.root / ("book" + ext)
+    if fmt == "md":
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("# " + project.title + "\n\n")
+            f.write("> 主题: " + project.meta.get("theme", "") + "\n")
+            f.write("> 类型: " + project.meta.get("genre", "") + "\n")
+            if project.meta.get("target_words"):
+                f.write("> 目标字数: " + str(project.meta["target_words"]) + "\n")
+            f.write("\n---\n\n")
+            for c in chapters:
+                n = int(c.stem)
+                t = titles.get("%04d" % n, "")
+                f.write("## 第 " + str(n) + " 章 " + (t if t else "") + "\n\n")
+                f.write(c.read_text(encoding="utf-8").strip())
+                f.write("\n\n---\n\n")
+    else:
+        with open(output_path, "w", encoding="utf-8") as f:
+            for c in chapters:
+                f.write(c.read_text(encoding="utf-8").strip())
+                f.write("\n\n")
+    return output_path
+
 def chat_assistant(project, chapter_no, instruction, client=None):
     """协作修改助手。"""
     client = client or LLMClient(GlobalConfig())
