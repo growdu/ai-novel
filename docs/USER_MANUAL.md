@@ -251,6 +251,64 @@ novel adapt \
 cat .novel/adapt.md
 ```
 
+### 教程 5：一键全自动（novel auto）
+
+最省事给 6 个参数就跑完整本小说：
+
+```mermaid
+graph LR
+    A[spec 输入] --> B[planning<br/>大纲→章纲]
+    B --> C[writing<br/>每章 3 轮迭代]
+    C --> D[polishing<br/>未达标重写]
+    D --> E[consistency<br/>一致性检查]
+    E --> F[export<br/>book.md]
+```
+
+```bash
+# 最短的一篇基本流程
+cd ~/novels
+novel auto my_novel \
+  --title "冬夜的灰" \
+  --theme "1995 年东北小镇的命案与四个孩子" \
+  --genre 悬疑 \
+  --style 冷峻 \
+  --words 60000 \
+  --quality premium
+
+# Ctrl-C 之后续跑：
+cd ~/novels
+novel auto my_novel --title "冬夜的灰" ...   # 自动从上次中断处继续
+```
+
+参数速查：
+
+| 参数 | 含义 |
+|------|------|
+| `-t, --title` | 小说标题（必填）|
+| `--theme` | 一句话主题 |
+| `-g, --genre` | 题材（默认 "现实 / 严肃文学"）|
+| `-s, --style` | 文风（预设名或自由描述）|
+| `-w, --words` | 目标总字数 |
+| `--chapters` | 显式指定章节数（与 --words 二选一）|
+| `--quality` | draft / standard / premium（默认 standard）|
+| `--resume` | 强制续跑（默认自动检测）|
+| `--fresh` | 强制从头跑（覆盖旧进度）|
+| `--dry-run` | DRY_RUN 模式：不调 API |
+| `--here` | 就地初始化（跳过 NAME）|
+
+质量档差异：
+
+| 档 | 章节迭代 | 字数容差 | AI 味阈值 | 雷达阈值 | 适合 |
+|---|---|---|---|---|---|
+| draft | 1 | ±30% | 跳过 | 跳过 | 网文冲量 |
+| standard | 2 | ±20% | < 50 | ≥ 60 | 一般场景 |
+| **premium** | **3** | **±10%** | **< 30** | **≥ 70** | **严肃向** |
+
+**可恢复 + 自动续跑**：
+- 每章写完即保存到 `.novel/auto_state.json`
+- Ctrl-C 后下次跑 `novel auto` 自动从中断处继续
+- 失败的章节保留最后一次输出（占位草稿），可后续 `novel chapter N` 手动重写
+
 ---
 
 ## 4. 命令详解

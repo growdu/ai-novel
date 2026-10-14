@@ -1592,6 +1592,124 @@ def whereami():
 
 
 @app.command()
+def auto(
+    name: str = typer.Argument(None, help="项目目录名（与 --here 互斥）"),
+    title: str = typer.Option(..., "--title", "-t", help="小说标题（必填）"),
+    theme: str = typer.Option("", "--theme", help="一句话主题"),
+    genre: str = typer.Option("现实 / 严肃文学", "--genre", "-g", help="题材"),
+    style: str = typer.Option("", "--style", "-s", help="文风（预设名或自由描述）"),
+    words: int = typer.Option(30000, "--words", "-w", help="目标总字数"),
+    chapters: int = typer.Option(None, "--chapters", help="显式指定章节数"),
+    quality: str = typer.Option("standard", "--quality", help="质量档：draft / standard / premium"),
+    resume: bool = typer.Option(False, "--resume", help="强制续跑"),
+    fresh: bool = typer.Option(False, "--fresh", help="强制从头跑（覆盖旧进度）"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    here: bool = False,
+    force: bool = False,
+):
+    """一键全自动写小说：给定最小信息，自动跑完规划→写作→润色→一致性→导出。
+
+    自动可恢复：每章写完即保存到 .novel/auto_state.json，Ctrl-C 后下次
+    novel auto 自动从中断处续跑（无需 --resume）。
+
+    Examples:
+        novel auto demo --title "冬夜的灰" --theme "1995 东北命案" \\
+            --genre 悬疑 --style 冷峻 --words 60000 --quality premium
+    """
+    from novel.auto import AutoSpec, run_auto_novel
+    from novel.auto_state import AutoSpec as _SpecAlias, AutoState as _StateAlias
+
+    # 解析 quality
+    from novel.auto_state import QualityPreset
+    try:
+        quality_preset = QualityPreset(quality)
+    except ValueError:
+        console.print(f"[red]未知 quality：{quality}。可选：draft/standard/premium[/red]")
+        raise typer.Exit(1)
+
+    cfg = load_global()
+    is_dry = dry_run or cfg.dry_run
+
+    # 项目目录
+    if here:
+        project_dir = Path.cwd()
+    elif name:
+        project_dir = Path.cwd() / name
+    else:
+        console.print("[red]请提供 NAME 或加 --here。[/red]")
+        raise typer.Exit(1)
+
+    # 项目 init / load
+    proj = None
+    try:
+        proj = S.load_project(project_dir)
+        if not here and name and not force:
+            # 已存在的项目目录，继续续跑
+            pass
+    except S.ProjectNotFoundError:
+        if here and not force:
+            if not Confirm.ask(f"在 {project_dir} 创建新项目？", default=True):
+                raise typer.Exit()
+        project_dir.mkdir(parents=True, exist_ok=True)
+        proj = S.init_project(
+            project_dir,
+            title,
+            theme=theme,
+            meta={"genre": genre, "target_words": words, "style_preset": style},
+        )
+
+    if proj is None:
+        console.print("[red]无法初始化或加载项目。[/red]")
+        raise typer.Exit(1)
+
+    # 续跑检测
+    state_path = proj.root / ".novel" / "auto_state.json"
+    effective_resume = True
+    if state_path.exists() and not fresh:
+        from novel.auto_state import AutoState
+        st = AutoState.load(proj.root)
+        if st and st.spec.get("title") == title:
+            done = sum(1 for r in st.chapter_results.values() if r.status in ("generated", "polished"))
+            console.print(Panel.fit(
+                f"[green]检测到上次进度[/green]\n"
+                f"阶段: {st.phase.value} | 已完成: {done}/{st.chapters_total}\n"
+                f"已用 token: {st.cumulative_tokens:,} | 用时: {(st.updated_at - st.started_at)/60:.0f} 分钟\n\n"
+                f"[dim]直接 Enter 续跑；输入 n 重新开始[/dim]",
+                title="novel auto 续跑",
+            ))
+            if not resume:
+                ans = Prompt.ask("续跑？", default="y")
+                if ans.lower().startswith("n"):
+                    effective_resume = False
+        else:
+            effective_resume = False
+    else:
+        effective_resume = False
+
+    # 构造 spec
+    spec = AutoSpec(
+        title=title,
+        theme=theme or "",
+        genre=genre,
+        style=style,
+        target_words=words,
+        target_chapters=chapters or 0,
+        quality=quality_preset,
+    )
+
+    # 启动编排器
+    try:
+        out = run_auto_novel(spec, proj.root, cfg=cfg, resume=effective_resume)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]用户中断。再次运行 novel auto 自动续跑。[/yellow]")
+        raise typer.Exit(130)
+    except Exception as e:
+        console.print(f"[red]novel auto 失败：{e}[/red]")
+        raise typer.Exit(1)
+    console.print(Panel.fit(f"[green]✓ 全书完成：[/green] {out}", title="novel auto"))
+
+
+@app.command()
 def templates():
     """列出推荐的题材 + 文风组合，一键 init 用。
 

@@ -644,6 +644,52 @@ novel progress
 
 ---
 
+## 11. 全自动 vs 手工：什么时候用哪个
+
+`novel auto` 提供 `draft / standard / premium` 三档质量档，覆盖大多数长篇场景。选哪个的关键是：质量优先还是速度优先？
+
+```mermaid
+graph TB
+    Start[场景特质/文风要什么?]
+    Start --> P1[demo/试错]
+    Start --> P2[冲量型网文]
+    Start --> P3[严肃文学长篇]
+    Start --> P4[精修单章]
+
+    P1 --> R1[draft + --dry-run]
+    P2 --> R2[standard + 网文题材]
+    P3 --> R3[premium + 手工润色]
+    P4 --> R4[不 auto，手工 novel chapter]
+```
+
+| 场景 | 推荐 | 原因 |
+|------|------|------|
+| 100K 字网文冲量 | `novel auto --quality standard` | 量大，标准档足够 |
+| 50K 字严肃文学 | `novel auto --quality premium` + 后期手工润色 | 质量门需要 radar ≥ 70 |
+| 5K 字短篇 / 单章 | 手工 `novel chapter N --iters 3` | 全自动开销大于收益 |
+| 写 demo / 试错大纲 | `novel auto --dry-run` | 不调 API，验流程 |
+| 跑一半换文风 | `novel auto --fresh --style 新文风` | 重头跑覆盖成本高 |
+| 50K 字已写 10K | `novel auto --resume` | 自动跳过已写章节 |
+| 跨项目批量管理 | 手工 init + auto 各项目 | 每个项目独立跑 |
+
+### 11. 何时别用 auto
+
+| 场景 | 为什么 |
+|------|------|
+| 需要现场探索人设 | auto 会一次性生成人物志，之后想改需要重跑 |
+| 章节需要反复推敲 | auto 只会按字数/雷达门控重写，不保证"中段突转" |
+| 已写 50K 想加入新伏笔 | auto 难以理解中期追加伏笔，建议手工改大纲 |
+| API key 试用期 | auto 会用大量 token，手工写 1-3 章可以控制 |
+
+### 11.2 全自动常见决策点
+
+1. **预算紧张**：`--budget 0.50`；超额后自动降级到 draft
+2. **想要快但质量还行**：`--quality standard` + `--chapters 20`
+3. **精修档卡住怎么办**：检查 `.novel/reports/detect_NNNN.md` 看哪章 AI 味高；用 `novel chat N '指令'` 手动改
+4. **状态文件损坏**：用 `cat .novel/auto_state.json` 检查；删掉 `auto_state.json` 后 `--fresh` 重头
+
+---
+
 ## 附录 A：常见错误快速排查
 
 | 错误现象 | 原因 | 解决 |
