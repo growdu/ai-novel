@@ -539,6 +539,47 @@ def genres():
     for g in list_genres():
         console.print("  - " + g)
 
+@app.command(name="webnovel-pack")
+def webnovel_pack(
+    name: str = typer.Argument(..., help="项目目录名"),
+    title: str = typer.Option(..., "--title", "-t", help="小说标题"),
+    theme: str = typer.Option(..., "--theme", help="一句话主题"),
+    sub_genre: str = typer.Option("修仙 / 玄幻（网文风）", "--genre", "-g", help="网文子题材（用 webnovel-genres 查看）"),
+    sub_style: str = typer.Option("经典爽文", "--style", "-y", help="爽感文风（用 webnovel-styles 查看）"),
+    words: int = typer.Option(2000000, "--words", "-w"),
+    idea: str = typer.Option("", "--idea", help="金手指 / 核心设定（可选）"),
+):
+    """一键网文包：建项目 + 选网文题材 + 选爽文文风 + 写金手指。"""
+    cfg = load_global()
+    from novel.prompts import get_webnovel_genre_block, get_webnovel_style_block
+    genre_block = get_webnovel_genre_block(sub_genre)
+    style_block = get_webnovel_style_block(sub_style)
+    if not genre_block:
+        console.print("[red]未知网文题材 %s。[/red]" % sub_genre)
+        raise typer.Exit(1)
+    if not style_block:
+        console.print("[red]未知爽感文风 %s。[/red]" % sub_style)
+        raise typer.Exit(1)
+    target = Path.cwd() / name
+    if target.exists() and any(target.iterdir()):
+        console.print("[red]目录 %s 不为空。[/red]" % target)
+        raise typer.Exit(1)
+    target.mkdir(parents=True, exist_ok=True)
+    S.init_project(target, title, theme=theme, meta={"genre": sub_genre, "target_words": words, "style_preset": sub_style, "kind": "webnovel"})
+    style_content = "# 网文爽感文风\n\n" + style_block + "\n\n## 核心金手指\n\n" + (idea or "（待定）") + "\n"
+    (target / ".novel" / "style.md").write_text(style_content, encoding="utf-8")
+    (target / ".novel" / "genre_preset.md").write_text("# 网文题材: " + sub_genre + "\n\n" + genre_block + "\n", encoding="utf-8")
+    plan_text = "## 核心设定\n\n" + (idea or "（待补充）") + "\n\n## 黄金三章骨架\n\n1. 第 1 章 - 困境：主角被压迫\n2. 第 2 章 - 觉醒：金手指出现\n3. 第 3 章 - 打脸：第一次装逼打脸\n\n## 后续节奏建议\n\n- 每 10-20 章一个升级小高潮\n- 每 30-50 章一个地图跃迁\n- 每 100 章一个 boss 战\n\n## 写作时清单\n\n- [ ] 第 1 章必须有清晰困境\n- [ ] 第 2 章金手指规则明确\n- [ ] 第 3 章打脸让读者爽到\n- [ ] 主角性格不能完美\n- [ ] 每章结尾留钩子\n"
+    (target / ".novel" / "webnovel_plan.md").write_text(plan_text, encoding="utf-8")
+    console.print(Panel.fit("[green]网文项目已建:[/green] " + str(target) + "\n[green]标题:[/green] " + title + "\n[green]题材:[/green] " + sub_genre + "\n[green]文风:[/green] " + sub_style, title="novel webnovel-pack"))
+    console.print("\n[dim]下一步：[/dim]")
+    console.print("  1. cd " + str(target))
+    console.print("  2. novel outline")
+    console.print("  3. novel characters")
+    console.print("  4. novel chapter 1  # 黄金三章第 1 章：困境")
+    console.print("  5. novel chapter 2  # 金手指觉醒")
+    console.print("  6. novel chapter 3  # 首次打脸")
+
 @app.command(name="webnovel-genres")
 def webnovel_genres_cmd():
     """列出所有支持的网文题材（9 个）。"""
