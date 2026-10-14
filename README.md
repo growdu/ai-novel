@@ -7,6 +7,21 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![Version](https://img.shields.io/badge/version-0.11.0-orange)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-111%20passed-brightgreen)](tests/)
+
+## 📚 文档
+
+| 文档 | 读者 | 内容 |
+|------|------|------|
+| [📘 REQUIREMENTS.md](docs/REQUIREMENTS.md) | PM / 架构师 | 需求规格（46 功能 / 6 非功能 / 7 验收标准） |
+| [📐 DESIGN.md](docs/DESIGN.md) | 开发者 | 架构图 / 数据流图 / 关键模块设计（**30+ mermaid**） |
+| [📗 USER_MANUAL.md](docs/USER_MANUAL.md) | 作者 | 安装 / 教程 / 命令详解 / 故障排查 |
+| [📙 BEST_PRACTICES.md](docs/BEST_PRACTICES.md) | 作者 | 题材搭配 / 降 AI 味 / 实战配方 / 避坑清单 |
+| [📕 文档索引](docs/README.md) | 所有人 | 按角色分类的文档地图 |
+
+**新作者**：先读 [USER_MANUAL.md](docs/USER_MANUAL.md) § 1-3（5 分钟上手 + 4 个教程）。
+
+**贡献者**：先读 [CONTRIBUTING.md](CONTRIBUTING.md) + [DESIGN.md](docs/DESIGN.md) § 1-2。
 
 ## ✨ 特性速览
 
