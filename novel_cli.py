@@ -1607,7 +1607,16 @@ def auto(
     dry_run: bool = typer.Option(False, "--dry-run"),
     here: bool = False,
     force: bool = False,
+    serve: bool = typer.Option(False, "--serve", help="同时启动 Web 仪表盘"),
+    serve_port: int = typer.Option(8765, "--serve-port", help="仪表盘端口"),
 ):
+    """一键全自动写小说：给定最小信息，自动跑完规划→写作→润色→一致性→导出。
+
+    自动可恢复：每章写完即保存到 .novel/auto_state.json，Ctrl-C 后下次
+    novel auto 自动从中断处续跑（无需 --resume）。
+
+    --serve 启动 Web 仪表盘：浏览器打开 http://127.0.0.1:8765 看实时进度。
+    """
     """一键全自动写小说：给定最小信息，自动跑完规划→写作→润色→一致性→导出。
 
     自动可恢复：每章写完即保存到 .novel/auto_state.json，Ctrl-C 后下次
@@ -1699,6 +1708,15 @@ def auto(
     )
 
     # 启动编排器
+    bg_server = None
+    if serve:
+        try:
+            from novel.web import serve_background
+            bg_server = serve_background(proj.root, port=serve_port, open_browser=True)
+            console.print(f"[dim]Web 仪表盘已启动：http://127.0.0.1:{serve_port}[/dim]")
+        except OSError as e:
+            console.print(f"[yellow]仪表盘启动失败（端口 {serve_port} 占用？）：{e}[/yellow]")
+
     try:
         out = run_auto_novel(
             spec, proj.root, cfg=cfg,
@@ -1711,6 +1729,59 @@ def auto(
         console.print(f"[red]novel auto 失败：{e}[/red]")
         raise typer.Exit(1)
     console.print(Panel.fit(f"[green]✓ 全书完成：[/green] {out}", title="novel auto"))
+
+
+@app.command()
+def serve(
+    port: int = typer.Option(8765, "--port", "-p", help="监听端口"),
+    host: str = typer.Option("127.0.0.1", "--host", help="监听地址（默认仅本机）"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="自动打开浏览器"),
+    project: str = typer.Option(".", "--project", help="要监控的项目目录（默认当前目录）"),
+):
+    """启动 Web 仪表盘：浏览器查看 novel auto 实时进度。
+
+    默认 http://127.0.0.1:8765，每 2 秒刷新一次。
+    暂停 / 继续 / 降级 / 停止 按钮会写控制信号到 .novel/auto_control.json，
+    让 novel auto 在下一章前响应。
+    """
+    try:
+        from novel.web import serve as serve_blocking
+    except ImportError:
+        console.print("[red]找不到 novel.web，请检查安装[/red]")
+        raise typer.Exit(1)
+
+    project_dir = Path(project).resolve()
+    if not (project_dir / ".novel").exists():
+        console.print(f"[red]{project_dir} 不是 novel 项目目录（缺少 .novel/）[/red]")
+        raise typer.Exit(1)
+
+    # 直接覆盖 host / port（不让 make_handler 管）
+    from novel.web import make_handler
+    from http.server import ThreadingHTTPServer
+    import webbrowser as _wb
+    import threading
+
+    handler = make_handler(project_dir)
+    server = ThreadingHTTPServer((host, port), handler)
+
+    if open_browser:
+        threading.Timer(
+            1.0,
+            lambda: _wb.open(f"http://{host}:{port}"),
+        ).start()
+
+    console.print(Panel.fit(
+        f"[green]novel-writer 仪表盘已启动[/green]\n\n"
+        f"URL: [bold]http://{host}:{port}[/bold]\n"
+        f"项目: {project_dir}\n\n"
+        f"[dim]按 Ctrl-C 停止服务器[/dim]",
+        title="novel serve",
+    ))
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("[yellow]停止仪表盘[/yellow]")
+        server.shutdown()
 
 
 @app.command()

@@ -253,8 +253,6 @@ cat .novel/adapt.md
 
 ### 教程 5：一键全自动（novel auto）
 
-最省事给 6 个参数就跑完整本小说：
-
 ```mermaid
 graph LR
     A[spec 输入] --> B[planning<br/>大纲→章纲]
@@ -395,6 +393,40 @@ novel config [--base-url URL] [--model MODEL] [--api-key KEY] [--dry-run/--no-dr
 | `novel world` | 生成世界观 |
 | `novel volumes` | 长篇分卷 |
 | `novel plan N` | 细化第 N 章大纲 |
+
+### 4.2.5 Web 仪表盘（novel serve）
+
+跑 `novel auto` 跑半天，开浏览器看实时进度：
+
+```bash
+# 另开一个终端
+cd ~/novels/my_novel
+novel serve         # 默认 http://127.0.0.1:8765
+# 或在 auto 跑时一并启动
+novel auto my_novel --title "..." --serve  # auto 启动后台仪表盘
+```
+
+仪表盘显示：
+
+| 卡片 | 信息 |
+|------|------|
+| 进度 | X/Y + 进度条 + 百分比 |
+| 累计字数 | 当前总产出 |
+| 累计 Token | input / output 分别显示 |
+| 估算成本 | CNY + 预算剩余百分比 |
+| 已用时间 | h:mm:ss |
+| 未达标章节 | 失败计数 |
+
+按钮：
+
+| 按钮 | 效果 |
+|------|------|
+| ⏸ 暂停 | 当前章节写完后停下 |
+| ▶ 继续 | 恢复运行 |
+| ⬇ 降级到 draft | 立即降级 |
+| ■ 停止 | 立即停（写完当前章节后退出）|
+
+控制信号写到 `.novel/auto_control.json`，每章写完后检查。无需重启服务器。
 
 ### 4.3 写作命令
 

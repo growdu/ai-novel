@@ -58,6 +58,38 @@ console = Console()
 
 
 # ---------------------------------------------------------------------------
+# Web 控制信号
+# ---------------------------------------------------------------------------
+
+def _check_control_signal(project_root: Path) -> None:
+    """检查 .novel/auto_control.json 里的信号：pause/stop/downgrade/run。"""
+    try:
+        from novel.web import ControlSignal
+    except ImportError:
+        return
+    signal = ControlSignal.read(project_root)
+    if signal == ControlSignal.PAUSE:
+        console.print("[yellow]⏸ 检测到 PAUSE 信号：等待用户继续（写 run 到 .novel/auto_control.json 恢复）[/yellow]")
+        while ControlSignal.read(project_root) == ControlSignal.PAUSE:
+            import time as _t
+            _t.sleep(2)
+        console.print("[green]▶ 已恢复[/green]")
+    elif signal == ControlSignal.STOP:
+        console.print("[red]■ 检测到 STOP 信号：停止运行[/red]")
+        raise KeyboardInterrupt("user requested stop")
+    elif signal == ControlSignal.DOWNGRADE:
+        console.print("[yellow]⬇ 检测到 DOWNGRADE：降到 draft 档[/yellow]")
+        # 通过 global state 引用降级：直接修改 spec.quality（仅影响后续阶段）
+        import novel.auto as _mod
+        # 简单方式：后续 write 走 max_iters=1
+        # 由于 Python 闭包，这里通过一个全局变量传递
+        _mod._DOWNGRADE_REQUESTED = True
+
+
+_DOWNGRADE_REQUESTED = False
+
+
+# ---------------------------------------------------------------------------
 # 阶段 1：规划
 # ---------------------------------------------------------------------------
 
@@ -333,6 +365,9 @@ def _writing_phase(
     state.save(project.root)
     console.print("[bold cyan]阶段 2/5：逐章生成[/bold cyan]")
 
+    # 注入 Web 控制信号检查
+    _check_control_signal(project.root)
+
     with Progress(
         SpinnerColumn(),
         TextColumn("{task.description}"),
@@ -350,6 +385,8 @@ def _writing_phase(
             if state.is_chapter_done(n):
                 progress.update(task_id, advance=1, description=f"第 {n} 章：跳过（已完成）")
                 continue
+            # 写每章前检查暂停 / 停止 / 降级
+            _check_control_signal(project.root)
             result = _write_one_chapter(spec, project, n, client, state, progress, task_id)
             # 累加 token 到 state
             if hasattr(client, "prompt_tokens"):
