@@ -7,7 +7,6 @@ import json
 import time
 import re
 from dataclasses import dataclass, field
-from typing import Iterable
 
 import requests
 

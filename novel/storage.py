@@ -116,17 +116,39 @@ def init_project(root, title, theme="", meta=None):
 
 
 def load_project(root=None):
+    """从当前目录加载小说项目。
+
+    找不到 .novel 时抛出友好的 ProjectNotFoundError，
+    提示用户用 novel init 初始化或在已有项目目录里执行命令。
+    """
     from .config import find_project_root
 
     base = (root or Path.cwd()).resolve()
     proj_root = find_project_root(base)
     if not proj_root:
-        raise FileNotFoundError("未找到 .novel 项目目录，请先在小说根目录运行 novel init 初始化。")
+        raise ProjectNotFoundError(
+            "未找到 .novel 项目目录。\n"
+            "  当前目录: " + str(base) + "\n"
+            "  解决方法：\n"
+            "    - 如果还没建项目：cd 到想写小说的位置，执行 `novel init <name>`\n"
+            "    - 如果已建项目：cd 进入项目根目录（包含 .novel 的那层）\n"
+            "    - 想要强制在当前目录建项目：`novel init . --here`"
+        )
     yml = proj_root / PROJECT_DIR / "project.yaml"
     if not yml.exists():
-        raise FileNotFoundError("项目元信息缺失: " + str(yml))
+        raise ProjectNotFoundError(
+            "项目元信息缺失：" + str(yml) + "\n"
+            "项目目录可能损坏。运行 `novel doctor` 诊断，或删除 .novel 重做。"
+        )
     data = _read_yaml(yml) or {}
     return Project(root=proj_root, title=data.get("title", proj_root.name), meta=data)
+
+
+class ProjectNotFoundError(FileNotFoundError):
+    """未找到项目目录。用 FileNotFoundError 兼容旧的 except，但携带更友好的 message。"""
+
+    def __str__(self):
+        return self.args[0] if self.args else "project not found"
 
 
 def save_chapter(project, chapter_no, content, backup=True):

@@ -159,19 +159,50 @@ auto-retry：章节空内容自动重试 2 次（解决 5 截断问题）
 - 自动存档：.novel/genre_preset.md 保存选中的题材硬规则
 - novel genres / novel styles 命令：查询所有支持预设
 
-## 5.11 v0.11 改编工作流（commits 7c81a4, d17355e）
-新增 novel adapt / novel fanfic 两条流：
-- prompts/skeleton.md：提取源小说的纯骨架
-- prompts/adapt.md：基于骨架改编（换名/换壳/后传/反派视角/性别转换）
-- prompts/fanfic.md：写后传/番外/同人
-- generator.py：extract_skeleton / adapt_novel / write_fanfic
-- CLI novel adapt：完整 2 步改编流程
-  --source/--text 输入源小说信息
-  --direction 选改编方向
-  --genre/--style 目标题材文风（自动注入硬规则）
-  --title 新标题，--with-skeleton 是否先提取骨架
-- CLI novel fanfic：写衍生作品
-  --char 视角人物，--era 故事时机，--as-chapter 直接保存为章节
+## 5.12 v0.11 易用性增强 + 工程化（commit a3c447c + 本次改动）
+### 5.12.1 易用性提升
+- novel --version / -V 全局标志
+- novel version 命令（含环境信息）
+- novel setup 交互式首次配置向导（密码隐藏 + 确认；支持 --no-input）
+- novel doctor --fix 自动修复占位文件
+- novel doctor --json 机器可读报告
+- novel rollback / novel fix 默认显示 diff 摘要 + Confirm 确认；--yes 跳过
+- ProjectNotFoundError 携带友好解决路径（cd / init / --here）
+- shell 自动补全：add_completion=True + typer --install-completion
+
+### 5.12.2 多项目管理
+- novel list [--path / --depth]：列目录下所有 .novel 项目（跳级深度、隐藏目录过滤）
+- novel info <name>：不cd查看项目元信息
+- novel whereami：当前在哪项目里（不在项目里也给建议）
+- novel webnovel-pack 已有：一键网文项目
+
+### 5.12.3 工程化
+- pyproject.toml: 0.1.0 → 0.11.0
+- novel/__init__.py: __version__ = "0.11.0"
+- pyproject.toml 加入 [tool.ruff] + [tool.pytest.ini_options]
+- dev extras: pip install -e ".[dev]"
+- 测试覆盖：103 个 → 111 个用例，5 个文件
+  - test_llm.py: _strip_think_tags 三层兜底
+  - test_storage.py: 项目 CRUD + 版本备份 + 字数统计
+  - test_prompts.py: 题材/文风预设匹配 + 消息构建
+  - test_diff_and_config.py: diff + config env helpers
+  - test_cli.py: version / setup / init / doctor / list / info / whereami
+- CI: .github/workflows/ci.yml
+  - 3 矩阵 Python 3.10/3.11/3.12
+  - lint + 单测 + DRY_RUN smoke test
+  - Issue template + PR template
+
+### 5.12.4 Bug 修复
+- novel_cli.py:270-272 polish() 重复 save_chapter + print
+- novel_cli.py:831 retry-stuck() ctx dict 重复 genre 键
+- novel_cli.py:636 progress() vol_pattern.pattern 永远 truthy 死代码
+- novel_cli.py:556 list() 命名冲突覆盖 Python builtin，导致 doctor 报错
+- novel/generator.py:250 update_rolling_summary() 缺 Message 导入
+
+### 5.12.5 文档
+- README.md 全面重写：46 命令完整列表（含 v0.10 题材/文风、v0.11 改编/网文）
+- CONTRIBUTING.md：开发流程、修改规范、PR 流程
+- CHANGELOG.md：v0.1 - v0.11 完整版本日志
 
 实战：
 - 白夜行 -> 校园/冷峻《夜行》：35 章 4 卷完整改编，22 年时间跨度

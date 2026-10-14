@@ -1,4 +1,41 @@
-__pycache__
+# Python
+__pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 环境变量（不应入库）
 .env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 测试残留
+proj_a/
+proj_b/
+/tmp/test_*/
+
+# AI 生成的书稿（可选，体积大）
+my_novel/book.txt
+my_novel/book.md
+my_novel/.novel/chapters/
+my_novel/.novel/history/
+
+# 知识图谱（本地缓存）
+.code-review-graph/
+
+# 操作系统
+.DS_Store
+Thumbs.db

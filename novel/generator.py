@@ -14,7 +14,6 @@ def load_style_samples(project, max_samples=2, max_chars=2000):
     samples_dir = project.samples_dir
     if not samples_dir.exists():
         return ""
-    import os
     files = sorted(samples_dir.glob("*.md"))
     if not files:
         return ""
@@ -247,6 +246,7 @@ def update_rolling_summary(project, client=None):
         prev_summary = ""
     sys_msg = P.de_ai_flavour() + "\n\n## 你的具体任务：压缩全书滚动摘要\n\n" + P.rolling_summary()
     user = "[重要] 输出结构化元数据（滚动摘要），不是小说正文。\n\n## 全书大纲\n" + outline + "\n\n## 人物志\n" + characters + "\n\n## 当前滚动摘要\n" + prev_summary + "\n\n## 最近章节\n" + "\n\n".join(blobs)
+    from novel.llm import Message
     msgs = [Message("system", sys_msg), Message("user", user)]
     res = client.chat(msgs, temperature=0.3, max_tokens=20000)
     project.rolling_summary_path.write_text("# 滚动摘要\n\n" + res.content + "\n", encoding="utf-8")

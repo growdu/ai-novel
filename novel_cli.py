@@ -7,16 +7,45 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from novel.config import GlobalConfig, load_global
+from rich.prompt import Prompt, Confirm
+from novel import __version__
+from novel.config import load_global
 from novel import storage as S
 from novel import generator as G
 from novel.llm import LLMClient
 from novel import prompts as P
-app = typer.Typer(help="AI 小说创作工具")
+app = typer.Typer(
+    help="AI 小说创作工具 · novel-writer " + __version__,
+    no_args_is_help=True,
+    add_completion=True,
+    pretty_exceptions_enable=True,
+    rich_markup_mode="rich",
+    invoke_without_command=True,
+)
 console = Console()
 @app.callback()
-def _main(ctx: typer.Context, verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q")):
+def _main(
+    ctx: typer.Context,
+    version: bool = typer.Option(False, "--version", "-V", help="显示版本号并退出", is_eager=True),
+    verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q"),
+):
+    if version:
+        console.print(f"[bold]novel-writer[/bold] {__version__}")
+        raise typer.Exit()
     ctx.obj = {"verbose": verbose}
+
+
+def _load_project():
+    """友好的项目加载：找不到时给出操作建议。"""
+    try:
+        return S.load_project()
+    except S.ProjectNotFoundError as e:
+        console.print(Panel.fit(
+            str(e),
+            title="[red]未找到 .novel 项目目录[/red]",
+            border_style="red",
+        ))
+        raise typer.Exit(1) from None
 def _print_cfg(cfg):
     t = Table(title="当前配置")
     t.add_column("项")
@@ -47,6 +76,93 @@ def config(
         cfg.dry_run = dry_run
     _print_cfg(cfg)
 
+
+@app.command()
+def version(
+    short: bool = typer.Option(False, "--short", "-s", help="只输出版本号，无颜色"),
+):
+    """显示 novel-writer 版本号与运行环境。"""
+    py = sys.version.split()[0]
+    if short:
+        typer.echo(__version__)
+        raise typer.Exit()
+    table = Table(title="novel-writer 环境信息", show_header=False)
+    table.add_column("项", style="cyan")
+    table.add_column("值")
+    table.add_row("novel-writer", __version__)
+    table.add_row("Python", py)
+    table.add_row("平台", sys.platform)
+    table.add_row("typer", typer.__version__ if hasattr(typer, "__version__") else "unknown")
+    table.add_row("模型", load_global().model)
+    table.add_row("base_url", load_global().base_url)
+    console.print(table)
+
+
+@app.command()
+def setup(
+    force: bool = typer.Option(False, "--force", "-f", help="已存在 .env 时仍覆盖"),
+    non_interactive: bool = typer.Option(False, "--no-input", help="用环境变量 / 已有 .env，非交互"),
+):
+    """首次配置向导：交互式生成 .env。
+
+    依次询问 API base URL、API key、模型、温度、章节字数、DRY_RUN。
+    已存在 .env 时默认跳过；--force 覆盖。
+    """
+    env_path = Path.cwd() / ".env"
+    if env_path.exists() and not force:
+        console.print(f"[yellow].env 已存在：[/yellow] {env_path}\n[dim]用 --force 覆盖，或直接编辑。[/dim]")
+        if non_interactive:
+            return
+        if not Confirm.ask("是否覆盖现有 .env？", default=False):
+            return
+    if non_interactive:
+        cfg = load_global()
+        lines = [
+            f"OPENAI_BASE_URL={cfg.base_url}",
+            f"OPENAI_API_KEY={cfg.api_key or ''}",
+            f"OPENAI_MODEL={cfg.model}",
+            f"TEMPERATURE={cfg.temperature}",
+            f"TOP_P={cfg.top_p}",
+            f"MAX_TOKENS={cfg.max_tokens}",
+            f"TARGET_CHAPTER_WORDS={cfg.target_chapter_words}",
+            f"DRY_RUN={'true' if cfg.dry_run else 'false'}",
+        ]
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        console.print(f"[green]已写入：[/green] {env_path}")
+        return
+    console.print(Panel.fit(
+        "[bold]novel-writer 首次配置向导[/bold]\n\n"
+        "下面会询问：API 地址、API key、模型、温度、DRY_RUN。\n"
+        "所有问题都可以直接回车用默认值。\n"
+        "完成后会在当前目录生成 .env 文件。",
+        title="setup",
+    ))
+    base_url = Prompt.ask("API base URL", default="https://api.minimaxi.com/v1")
+    api_key = Prompt.ask("API key", password=True, default=load_global().api_key or "")
+    model = Prompt.ask("模型", default="minimax-Text-01")
+    temperature = float(Prompt.ask("temperature（0.7 稳 / 0.95 放飞）", default="0.9"))
+    chapter_words = int(Prompt.ask("目标章节字数", default="3000"))
+    dry_run = Confirm.ask("开启 DRY_RUN 模式（不真调用 API）？", default=False)
+    lines = [
+        "# novel-writer 配置（由 setup 命令生成，可手动修改）",
+        f"OPENAI_BASE_URL={base_url}",
+        f"OPENAI_API_KEY={api_key}",
+        f"OPENAI_MODEL={model}",
+        f"TEMPERATURE={temperature}",
+        "TOP_P=0.95",
+        "MAX_TOKENS=4096",
+        f"TARGET_CHAPTER_WORDS={chapter_words}",
+        f"DRY_RUN={'true' if dry_run else 'false'}",
+        "",
+    ]
+    env_path.write_text("\n".join(lines), encoding="utf-8")
+    console.print(f"\n[green]✓ 已写入：[/green] {env_path}")
+    console.print("\n[dim]下一步：[/dim]")
+    console.print("  1. novel doctor      # 验证配置")
+    console.print("  2. novel init my_novel --title '你的小说标题' --genre 悬疑 --style 冷峻")
+    console.print("  3. cd my_novel && novel outline && novel characters && novel chapter 1")
+
+
 @app.command()
 def init(
     name: str = typer.Argument(..., help="小说项目目录名"),
@@ -58,7 +174,7 @@ def init(
     here: bool = typer.Option(False, "--here"),
 ):
     """初始化一个新的小说项目。"""
-    from novel.prompts import list_genres, list_styles, get_genre_block, get_style_block
+    from novel.prompts import get_genre_block, get_style_block
     if genre in ("现实", "严肃文学"):
         genre = "现实 / 严肃文学"
     style_block = get_style_block(style) if style else ""
@@ -181,7 +297,6 @@ def sprint(
 ):
     """自动冲刺：从最后一章后面继续写若干章。"""
     proj = S.load_project()
-    cfg = load_global()
     chapters = proj.list_chapters()
     last_no = 0
     for c in chapters:
@@ -219,7 +334,6 @@ def write(
     outline_text = proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else ""
     characters_text = proj.characters_path.read_text(encoding="utf-8") if proj.characters_path.exists() else ""
     style = proj.style_path.read_text(encoding="utf-8") if proj.style_path.exists() else ""
-    genre = proj.meta.get("genre", "")
     client = LLMClient(cfg)
     for n in range(start, end + 1):
         plan = G.parse_chapter_plan(outline_text, n)
@@ -266,8 +380,6 @@ def polish(
     console.print(Panel(detect_report[:1500], title="AI 味检测"))
     p_msgs = P.build_polish_messages(content, plan, prev_tail, detect_report, extra)
     res = LLMClient(cfg).chat(p_msgs, temperature=0.9)
-    S.save_chapter(proj, no, res.content)
-    console.print("[green]已润色并覆盖第 %d 章。原版本已备份到 history/。[/green]" % no)
     S.save_chapter(proj, no, res.content)
     console.print("[green]已润色并覆盖第 %d 章。原版本已备份到 history/。[/green]" % no)
 
@@ -368,54 +480,118 @@ def plan(no: int = typer.Argument(..., help="章节号")):
     console.print("[green]已保存到[/green] " + str(proj.novel_dir / "chapter_plans" / ("%04d.md" % no)))
 
 @app.command()
-def doctor():
-    """自动诊断项目状态：检查必要文件、配置、潜在问题。"""
+def doctor(
+    fix: bool = typer.Option(False, "--fix", help="尝试自动修复可处理的问题（占位文件/缺失目录）"),
+    json_output: bool = typer.Option(False, "--json", help="机器可读 JSON 输出"),
+):
+    """自动诊断项目状态：检查必要文件、配置、潜在问题。
+
+    带 --fix 时会尝试自动处理可恢复的问题（创建缺失的目录、用占位文件填空白）。
+    带 --json 时输出结构化报告，方便脚本消费。
+    """
     proj = S.load_project()
     cfg = load_global()
     issues = []
     warnings = []
     ok = []
+    auto_fixable = []
+
+    def _record_fix(name, action):
+        if fix:
+            try:
+                action()
+                ok.append(f"[自动修复] {name}")
+            except Exception as e:
+                issues.append(f"[修复失败] {name}: {e}")
+        else:
+            auto_fixable.append(name)
+
     if not cfg.api_key:
-        issues.append("未设置 OPENAI_API_KEY")
+        issues.append("[red]未设置 OPENAI_API_KEY[/red]（运行 [bold]novel setup[/bold] 或编辑 .env）")
     if cfg.target_chapter_words < 1000:
         warnings.append("目标章节字数偏少，建议 2500-5000")
     if cfg.temperature < 0.7:
         warnings.append("temperature 偏稳，可能缺少变化")
+    if cfg.temperature > 1.1:
+        warnings.append("temperature 偏高（>1.1），可能过于天马行空")
+
+    def _ensure_placeholder(path, body):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+
     if not proj.outline_path.exists() or proj.outline_path.stat().st_size < 100:
-        issues.append("大纲未生成（运行 novel outline）")
+        _record_fix(
+            "大纲缺失",
+            lambda: _ensure_placeholder(proj.outline_path, "# 大纲\n\n（待生成；运行 novel outline）\n"),
+        )
     if not proj.characters_path.exists() or proj.characters_path.stat().st_size < 100:
-        issues.append("人物志未生成（运行 novel characters）")
+        _record_fix(
+            "人物志缺失",
+            lambda: _ensure_placeholder(proj.characters_path, "# 人物志\n\n（待生成；运行 novel characters）\n"),
+        )
     if not proj.world_path.exists() or proj.world_path.stat().st_size < 100:
-        warnings.append("世界观未生成（运行 novel world，可选）")
+        _record_fix(
+            "世界观缺失",
+            lambda: _ensure_placeholder(proj.world_path, "# 世界观\n\n（待生成；运行 novel world）\n"),
+        )
     if not proj.volumes_path.exists() or proj.volumes_path.stat().st_size < 100:
-        warnings.append("分卷未生成（运行 novel volumes，可选）")
+        _record_fix(
+            "分卷缺失",
+            lambda: _ensure_placeholder(proj.volumes_path, "# 分卷\n\n（待生成；运行 novel volumes）\n"),
+        )
     if not proj.style_path.exists() or proj.style_path.stat().st_size < 100:
-        warnings.append("文风未设置（运行 init 时加 --style 或编辑 style.md）")
+        _record_fix(
+            "文风缺失",
+            lambda: _ensure_placeholder(proj.style_path, "# 文风\n\n（待设置；运行 init 时加 --style）\n"),
+        )
     chapters = proj.list_chapters()
     if not chapters:
-        warnings.append("还没有写任何章节（运行 novel chapter 1）")
+        warnings.append("还没有写任何章节（运行 [bold]novel chapter 1[/bold]）")
     else:
         for c in chapters:
             text = c.read_text(encoding="utf-8") if c.exists() else ""
             wc = S.chapter_word_count(text)
             if wc < 100:
-                issues.append("第 " + c.stem + " 章字数 " + str(wc) + " 异常（可能生成失败）")
+                issues.append(f"第 {c.stem} 章字数 {wc} 异常（可能生成失败；运行 [bold]novel retry-stuck[/bold]）")
     samples = list(proj.samples_dir.glob("*.md")) if proj.samples_dir.exists() else []
     samples = [s for s in samples if not s.name.startswith("_")]
     if not samples:
         warnings.append("samples/ 目录为空（放入作者手写片段可显著提升风格）")
     if chapters and len(chapters) >= 2:
-        if proj.state_path.stat().st_size < 100:
-            warnings.append("state.md 过小（应该 >= 100 字节）")
-        if proj.foreshadowing_path.stat().st_size < 100:
-            warnings.append("foreshadowing.md 过小")
-    if not issues:
+        try:
+            if proj.state_path.stat().st_size < 100:
+                warnings.append("state.md 过小（应该 >= 100 字节；运行 [bold]novel state[/bold]）")
+        except FileNotFoundError:
+            warnings.append("state.md 缺失（运行 [bold]novel state[/bold]）")
+        try:
+            if proj.foreshadowing_path.stat().st_size < 100:
+                warnings.append("foreshadowing.md 过小（运行 [bold]novel foreshadow[/bold]）")
+        except FileNotFoundError:
+            warnings.append("foreshadowing.md 缺失（运行 [bold]novel foreshadow[/bold]）")
+    if not issues and not auto_fixable:
         ok.append("通过所有关键检查")
+    if auto_fixable and not fix:
+        warnings.append(f"{len(auto_fixable)} 项可自动处理（用 [bold]--fix[/bold]）")
+
+    if json_output:
+        import json
+        report = {
+            "issues": issues,
+            "warnings": warnings,
+            "ok": ok,
+            "auto_fixable": auto_fixable,
+            "project_root": str(proj.root),
+            "title": proj.title,
+        }
+        typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+
     table = Table(title="novel doctor 诊断报告")
     table.add_column("状态")
     table.add_column("条数")
     table.add_row("[red]问题[/red]", str(len(issues)))
     table.add_row("[yellow]警告[/yellow]", str(len(warnings)))
+    table.add_row("[cyan]可自动修复[/cyan]", str(len(auto_fixable)))
     table.add_row("[green]通过[/green]", str(len(ok)))
     console.print(table)
     if issues:
@@ -428,6 +604,8 @@ def doctor():
             console.print("  " + str(i) + ". " + s)
     if ok and not issues and not warnings:
         console.print("\n[green]✓ " + ok[0] + "[/green]")
+    if auto_fixable and not fix:
+        console.print(f"\n[dim]提示：运行 [bold]novel doctor --fix[/bold] 自动处理 {len(auto_fixable)} 项[/dim]")
 
 @app.command()
 def adapt(
@@ -550,7 +728,6 @@ def webnovel_pack(
     idea: str = typer.Option("", "--idea", help="金手指 / 核心设定（可选）"),
 ):
     """一键网文包：建项目 + 选网文题材 + 选爽文文风 + 写金手指。"""
-    cfg = load_global()
     from novel.prompts import get_webnovel_genre_block, get_webnovel_style_block
     genre_block = get_webnovel_genre_block(sub_genre)
     style_block = get_webnovel_style_block(sub_style)
@@ -632,9 +809,6 @@ def progress():
         table.add_row("字数进度", "%.1f%%" % wc_pct)
     volumes_text = proj.volumes_path.read_text(encoding="utf-8") if proj.volumes_path.exists() else ""
     import re
-    vol_pattern = re.compile(r"##\s*(第[一二三四五六七八九十百千零0-9]+卷[：:]?[^\n]*?)\s+[^*]*?起止章节[：:]?\s*第\s*(\d+)\s*章?[-到]\s*第?\s*(\d+)\s*章", re.MULTILINE)
-    if not vol_pattern.pattern:
-        vol_pattern = re.compile(r"##\s*(第[一二三四五六七八九十百千零0-9]+卷[：:]?[^\n]+)", re.MULTILINE)
     current_vol = "-"
     vol_progress = "-"
     # 简单方法：按行找 "## 第N卷" 开头
@@ -828,7 +1002,6 @@ def retry_stuck(
             "characters": proj.characters_path.read_text(encoding="utf-8") if proj.characters_path.exists() else "",
             "style": proj.style_path.read_text(encoding="utf-8") if proj.style_path.exists() else "",
             "genre": proj.meta.get("genre", ""),
-                "genre": proj.meta.get("genre", ""),
             "chapter_plan": G.parse_chapter_plan(proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else "", n),
             "prev_chapter_tail": (S.load_chapter(proj, n - 1) or "")[-500:],
             "state": proj.state_path.read_text(encoding="utf-8") if proj.state_path.exists() else "",
@@ -914,8 +1087,12 @@ def rollback(
     no: int = typer.Argument(..., help="章节号"),
     to_version: str = typer.Option(None, "--to", help="回滚到哪个版本"),
     list_only: bool = typer.Option(False, "--list", "-l", help="只列出历史版本"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认"),
 ):
-    """把当前章节回滚到指定历史版本（备份当前为新版本）。"""
+    """把当前章节回滚到指定历史版本（备份当前为新版本）。
+
+    回滚前会显示 diff 摘要；用 --yes 跳过交互确认（适合脚本）。
+    """
     proj = S.load_project()
     if list_only:
         files = sorted(proj.history_dir.glob("chapter_%04d_v*.md" % no)) if proj.history_dir.exists() else []
@@ -937,17 +1114,31 @@ def rollback(
         raise typer.Exit(1)
     current = S.load_chapter(proj, no)
     if current:
+        from novel.diff_utils import stats_diff
+        st = stats_diff(current, target.read_text(encoding="utf-8"))
+        console.print(f"[dim]差异统计：新增 {st['added']} 行 / 删除 {st['removed']} 行 / 相似度 {st['similarity']*100:.1f}%[/dim]")
+    if not yes and not Confirm.ask(
+        f"确认把第 {no} 章回滚到 {to_version}？当前内容会备份为新历史版本。",
+        default=False,
+    ):
+        console.print("[yellow]已取消。[/yellow]")
+        raise typer.Exit()
+    if current:
         S.save_chapter(proj, no, current, backup=True)
     target_text = target.read_text(encoding="utf-8")
     S.save_chapter(proj, no, target_text, backup=False)
-    console.print("[green]已回滚第 " + str(no) + " 章到 " + to_version + "。回滚前内容已备份为新版本。[/green]" % (no, to_version))
+    console.print(f"[green]✓ 已回滚第 {no} 章到 {to_version}。回滚前内容已备份为新版本。[/green]")
 
 @app.command()
 def fix(
     no: int = typer.Argument(..., help="章节号"),
-    dry: bool = typer.Option(True, "--dry/--no-dry", help="只检查不修复"),
+    dry: bool = typer.Option(True, "--dry/--no-dry", help="只检查不修复（默认 dry）"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认"),
 ):
-    """检测并修复异常章节（0 字节 / 过短 / 残片）。"""
+    """检测并修复异常章节（0 字节 / 过短 / 残片）。
+
+    默认 dry 模式只打印建议，不动正文。要回滚动作加 --no-dry -y。
+    """
     proj = S.load_project()
     target = proj.chapters_dir / ("%04d.md" % no)
     if not target.exists():
@@ -965,13 +1156,18 @@ def fix(
     if "OK so" in text[:200] or "Let me" in text[:200]:
         issues.append("包含英文 think 残片")
     if issues:
-        console.print("[yellow]第 " + str(no) + " 章异常：[/yellow]")
+        console.print(f"[yellow]第 {no} 章异常：[/yellow]")
         for i, s in enumerate(issues, 1):
             console.print("  " + str(i) + ". " + s)
         if not dry:
-            console.print("\n[dim]建议：rm " + str(target) + " && novel chapter " + str(no) + " 重写[/dim]")
+            console.print(f"\n[dim]建议：rm {target} && novel chapter {no} 重写[/dim]")
+            if not yes and not Confirm.ask("按上述建议删除并重写？", default=False):
+                console.print("[yellow]已取消。请手动处理。[/yellow]")
+                raise typer.Exit()
+            target.unlink()
+            console.print(f"[green]✓ 已删除 {target}。请运行 novel chapter {no} 重写。[/green]")
     else:
-        console.print("[green]第 " + str(no) + " 章正常（" + str(wc) + " 字）。[/green]")
+        console.print(f"[green]第 {no} 章正常（{wc} 字）。[/green]")
 
 @app.command()
 def batch(
@@ -1274,6 +1470,158 @@ def status():
         wc = S.chapter_word_count(text)
         table.add_row("  - " + ch.name, str(wc) + " 字")
     console.print(table)
+
+
+@app.command(name="list")
+def list_cmd(
+    path: str = typer.Option(".", "--path", "-p", help="搜索起点目录"),
+    depth: int = typer.Option(3, "--depth", "-d", help="最多向下搜索几层"),
+):
+    """列出指定目录（含子目录）下所有 novel 项目。
+
+    用于管理多个项目时快速找到它们，不用一个个 cd。
+    """
+    base = Path(path).resolve()
+    if not base.exists():
+        console.print(f"[red]目录不存在：[/red] {base}")
+        raise typer.Exit(1)
+    projects = set()
+    # 限制搜索深度，避免扫描到无关目录
+    if depth < 1:
+        depth = 1
+    # 用 rglob 然后过滤深度
+    for novel_dir in base.glob("**/.novel"):
+        rel = novel_dir.relative_to(base)
+        # 深度 = rel.parts 中非 .novel 之前的层数
+        parts = [p for p in rel.parts if p != ".novel"]
+        if len(parts) > depth:
+            continue
+        # 跳过隐藏目录（如 .venv/.git/.cache 等）下的项目
+        if any(part.startswith(".") and part not in (".novel",) for part in rel.parts):
+            continue
+        projects.add(novel_dir.parent)
+    projects = sorted(projects, key=lambda x: str(x))
+    if not projects:
+        console.print(f"[yellow]在 {base}（深度 {depth}）下没有找到任何 .novel 项目。[/yellow]")
+        return
+    table = Table(title=f"找到 {len(projects)} 个项目")
+    table.add_column("标题")
+    table.add_column("题材")
+    table.add_column("字数目标")
+    table.add_column("路径")
+    for p in projects:
+        meta_path = p / ".novel" / "project.yaml"
+        title = p.name
+        genre = ""
+        words = ""
+        if meta_path.exists():
+            try:
+                import yaml
+                data = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+                title = data.get("title", title)
+                genre = data.get("genre", "")
+                w = data.get("target_words", 0)
+                words = f"{w // 1000}K" if w else ""
+            except Exception:
+                pass
+        table.add_row(title, genre, words, str(p))
+    console.print(table)
+
+
+@app.command()
+def info(
+    name: str = typer.Argument(..., help="项目目录名（相对于当前目录或绝对路径）"),
+):
+    """查看指定项目的元信息，不需要 cd 进项目。
+
+    比 status 更"远观"，适合快速了解项目配置。
+    """
+    p = Path(name)
+    if not p.is_absolute():
+        p = (Path.cwd() / name).resolve()
+    novel_dir = p / ".novel"
+    if not novel_dir.exists():
+        console.print(f"[red]{p} 不是 novel 项目目录（缺少 .novel/）。[/red]")
+        raise typer.Exit(1)
+    try:
+        import yaml
+        meta = yaml.safe_load((novel_dir / "project.yaml").read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        console.print(f"[red]project.yaml 解析失败：{e}[/red]")
+        raise typer.Exit(1) from None
+    table = Table(title=f"{meta.get('title', p.name)}")
+    table.add_column("项")
+    table.add_column("值")
+    table.add_row("路径", str(p))
+    table.add_row("题材", meta.get("genre", "未设置"))
+    table.add_row("文风预设", meta.get("style_preset", "未设置") or "(自由)")
+    table.add_row("目标字数", str(meta.get("target_words", "未设置")))
+    table.add_row("主题", meta.get("theme", "未设置")[:200])
+    chapters = list((novel_dir / "chapters").glob("[0-9]*.md")) if (novel_dir / "chapters").exists() else []
+    table.add_row("已写章节", str(len(chapters)))
+    table.add_row("最后修改", str(meta.get("source", ""))[:80])
+    console.print(table)
+    if chapters:
+        console.print(f"\n[dim]cd {p} && novel status 查看详情[/dim]")
+
+
+@app.command()
+def whereami():
+    """显示当前所在的项目路径与元信息（不要求在项目里）。
+
+    在项目里 → 显示项目名 + 路径。
+    不在项目里 → 给"不是错误"，用 yellow 提示，给出解决建议。
+    """
+    from novel.config import find_project_root
+    proj_root = find_project_root()
+    if proj_root is None:
+        console.print("[yellow]当前目录不在任何 novel 项目内。[/yellow]")
+        console.print(f"  当前路径: {Path.cwd()}")
+        console.print("  解决：[bold]novel init[/bold] 新建项目，或 [bold]cd[/bold] 进入已有项目")
+        return
+    try:
+        proj = S.load_project(proj_root)
+    except Exception as e:
+        console.print(f"[red]找到项目但加载出错：{e}[/red]")
+        return
+    console.print(Panel.fit(
+        f"[green]{proj.title}[/green]\n[dim]{proj.root}[/dim]",
+        title="当前项目",
+        border_style="green",
+    ))
+
+
+@app.command()
+def templates():
+    """列出推荐的题材 + 文风组合，一键 init 用。
+
+    比 webnovel-pack 更灵活，适合严肃向项目快速起步。
+    """
+    templates = [
+        {"name": "东北悬疑", "genre": "悬疑", "style": "冷峻", "words": 80000, "desc": "致敬双雪涛 / 班宇的北方叙事"},
+        {"name": "硬科幻", "genre": "科幻", "style": "朴素", "words": 60000, "desc": "贴近刘慈欣 / 阿西莫夫的扎实感"},
+        {"name": "古典言情", "genre": "言情", "style": "诗意", "words": 50000, "desc": "致敬张爱玲 / 王安忆的细腻"},
+        {"name": "武侠经典", "genre": "武侠", "style": "朴素", "words": 120000, "desc": "致敬金庸 / 古龙的江湖气"},
+        {"name": "轻松校园", "genre": "校园", "style": "轻松", "words": 30000, "desc": "日系轻小说 / 国产青春剧"},
+        {"name": "诗意现实", "genre": "现实", "style": "诗意", "words": 40000, "desc": "致敬汪曾祺 / 沈从文的淡墨"},
+        {"name": "黑色幽默", "genre": "都市", "style": "黑色幽默", "words": 50000, "desc": "致敬余华 / 王小波的戏谑"},
+        {"name": "网文经典", "genre": "修仙", "style": "经典爽文", "words": 2000000, "desc": "百万字长篇网文"},
+        {"name": "虐心言情", "genre": "言情", "style": "伤感", "words": 40000, "desc": "情感细腻、有遗憾感"},
+        {"name": "紧张悬疑", "genre": "悬疑", "style": "紧张", "words": 60000, "desc": "节奏快、悬念密"},
+    ]
+    table = Table(title="推荐题材 + 文风组合")
+    table.add_column("模板名")
+    table.add_column("题材")
+    table.add_column("文风")
+    table.add_column("字数")
+    table.add_column("风格描述")
+    for t in templates:
+        table.add_row(t["name"], t["genre"], t["style"], f"{t['words'] // 1000}K", t["desc"])
+    console.print(table)
+    console.print("\n[dim]用法示例：[/dim]")
+    console.print("  novel init my_novel --title '冬夜的灰' --genre 悬疑 --style 冷峻 --words 80000")
+    console.print("  novel webnovel-pack xianxia --title '凡人修仙' --theme '凡人逆袭' --idea '残破玉佩'")
+
 
 if __name__ == "__main__":
     app()
