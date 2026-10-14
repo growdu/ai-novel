@@ -103,6 +103,10 @@ class ChapterResult:
     ai_flavor: Optional[int] = None
     radar: Optional[int] = None
     elapsed_ms: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_cny: float = 0.0
     error: str = ""
 
 
@@ -119,7 +123,10 @@ class AutoState:
     chapters_failed: list[int] = field(default_factory=list)
     chapter_results: dict[int, ChapterResult] = field(default_factory=dict)
     cumulative_tokens: int = 0
+    cumulative_prompt_tokens: int = 0
+    cumulative_completion_tokens: int = 0
     cumulative_cost_cny: float = 0.0
+    budget_cny: float = 0.0
     last_error: str = ""
     planning_files: list[str] = field(default_factory=list)   # 已生成的 outline/characters/world/volumes
     polished: bool = False

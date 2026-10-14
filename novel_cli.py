@@ -1601,6 +1601,7 @@ def auto(
     words: int = typer.Option(30000, "--words", "-w", help="目标总字数"),
     chapters: int = typer.Option(None, "--chapters", help="显式指定章节数"),
     quality: str = typer.Option("standard", "--quality", help="质量档：draft / standard / premium"),
+    budget: float = typer.Option(0.0, "--budget", help="成本上限 CNY；0=不限"),
     resume: bool = typer.Option(False, "--resume", help="强制续跑"),
     fresh: bool = typer.Option(False, "--fresh", help="强制从头跑（覆盖旧进度）"),
     dry_run: bool = typer.Option(False, "--dry-run"),
@@ -1699,7 +1700,10 @@ def auto(
 
     # 启动编排器
     try:
-        out = run_auto_novel(spec, proj.root, cfg=cfg, resume=effective_resume)
+        out = run_auto_novel(
+            spec, proj.root, cfg=cfg,
+            resume=effective_resume, budget_cny=budget,
+        )
     except KeyboardInterrupt:
         console.print("\n[yellow]用户中断。再次运行 novel auto 自动续跑。[/yellow]")
         raise typer.Exit(130)

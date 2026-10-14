@@ -410,6 +410,24 @@ graph TB
     S5 --> Done
 ```
 
+### 7.2.1 预算控制（novel auto --budget）
+
+`novel auto` 会**实时显示**累计 token 和估算成本：
+
+```bash
+novel auto my_novel --budget 5.00 --words 200000
+```
+
+剩余 < 30% 时自动降级到 draft；剩余 < 60% 时降级到 standard；超出则用最便宜的 draft 跑完。
+
+| 模型 | 价格（¥/1M input + output）| 20 万字成本估算 |
+|---|---|---|
+| minimax-Text-01 | 1.0 + 1.0 | ~¥2-3 |
+| minimax-M3 | 1.0 + 1.0 | ~¥3-5 |
+| deepseek-chat | 1.0 + 2.0 | ~¥3-5 |
+| gpt-4o | 18.0 + 72.0 | ~¥30-50 |
+| claude-3-sonnet | 21.6 + 108.0 | ~¥40-70 |
+
 ### 7.3 实战配方
 
 #### 配 A：质量型（推荐）

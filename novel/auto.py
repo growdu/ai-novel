@@ -51,6 +51,7 @@ from novel.quality_gates import (
     run_all_gates,
     summarize,
 )
+from novel.token_tracker import TokenTracker
 
 
 console = Console()
@@ -60,8 +61,11 @@ console = Console()
 # 阶段 1：规划
 # ---------------------------------------------------------------------------
 
-def _planning_phase(spec: _AutoSpec, project: S.Project, client: LLMClient, state: AutoState) -> None:
-    """跑 outline / characters / world / volumes / 批量细化章纲。"""
+def _planning_phase(spec: _AutoSpec, project: S.Project, client, state: AutoState) -> None:
+    """跑 outline / characters / world / volumes / 批量细化章纲。
+
+    client 参数可以是 LLMClient 或 TokenTracker（后者会累加 token 到 state）。
+    """
     state.phase = Phase.PLANNING
     state.save(project.root)
     console.print("[bold cyan]阶段 1/5：规划[/bold cyan]")
@@ -166,7 +170,7 @@ def _write_one_chapter(
     spec: _AutoSpec,
     project: S.Project,
     n: int,
-    client: LLMClient,
+    client,  # LLMClient 或 TokenTracker
     state: AutoState,
     progress: Progress,
     task_id,
@@ -321,7 +325,7 @@ def _extract_radar(gates: list[GateResult]) -> int | None:
 def _writing_phase(
     spec: _AutoSpec,
     project: S.Project,
-    client: LLMClient,
+    client,  # LLMClient 或 TokenTracker
     state: AutoState,
 ) -> None:
     state.phase = Phase.WRITING
@@ -334,18 +338,42 @@ def _writing_phase(
         TextColumn("{task.description}"),
         BarColumn(),
         TaskProgressColumn(),
+        TextColumn("{task.fields[tokens_fmt]}", style="cyan"),
         TimeElapsedColumn(),
         console=console,
         transient=False,
     ) as progress:
         task_id = progress.add_task(
-            "准备中", total=spec.target_chapters,
+            "准备中", total=spec.target_chapters, tokens_fmt="token 0 | ¥0.00",
         )
         for n in range(1, spec.target_chapters + 1):
             if state.is_chapter_done(n):
                 progress.update(task_id, advance=1, description=f"第 {n} 章：跳过（已完成）")
                 continue
             result = _write_one_chapter(spec, project, n, client, state, progress, task_id)
+            # 累加 token 到 state
+            if hasattr(client, "prompt_tokens"):
+                state.cumulative_tokens += result.total_tokens or 0
+                state.cumulative_prompt_tokens += result.prompt_tokens
+                state.cumulative_completion_tokens += result.completion_tokens
+                # 估算成本
+                from novel.budget import estimate_cost_cny
+                state.cumulative_cost_cny += estimate_cost_cny(
+                    result.prompt_tokens, result.completion_tokens,
+                    getattr(client, "model", ""),
+                )
+                result.estimated_cost_cny = estimate_cost_cny(
+                    result.prompt_tokens, result.completion_tokens,
+                    getattr(client, "model", ""),
+                )
+                # 更新进度条上的 token/cost 显示
+                progress.update(
+                    task_id,
+                    tokens_fmt=(
+                        f"token {state.cumulative_tokens:,} | "
+                        f"¥{state.cumulative_cost_cny:.3f}"
+                    ),
+                )
             state.mark_chapter_done(result)
             state.save(project.root)
             progress.update(task_id, advance=1)
@@ -358,7 +386,7 @@ def _writing_phase(
 def _polishing_phase(
     spec: _AutoSpec,
     project: S.Project,
-    client: LLMClient,
+    client,  # LLMClient 或 TokenTracker
     state: AutoState,
 ) -> None:
     """如果精修档以下 / 状态跳过了这一步。"""
@@ -406,7 +434,7 @@ def _polishing_phase(
 def _consistency_phase(
     spec: _AutoSpec,
     project: S.Project,
-    client: LLMClient,
+    client,  # LLMClient 或 TokenTracker
     state: AutoState,
 ) -> None:
     state.phase = Phase.CONSISTENCY
@@ -463,6 +491,7 @@ def run_auto_novel(
     project_dir: Path,
     cfg: GlobalConfig | None = None,
     state: AutoState | None = None,
+    budget_cny: float = 0.0,
 ) -> Path:
     """一键全自动写小说主入口。
 
@@ -471,12 +500,15 @@ def run_auto_novel(
         project_dir: 项目目录（应已 init 过）。
         cfg: cfg 全局配置（默认 .env 加载）。
         state: 现有状态（None 表示新跑；非 None 用于续跑）。
+        budget_cny: 预算上限（CNY）。0 = 不限制。
 
     Returns:
         导出文件的绝对路径（book.md）。
     """
     cfg = cfg or GlobalConfig()
-    client = LLMClient(cfg)
+    raw_client = LLMClient(cfg)
+    # 包一层 TokenTracker，记录所有 LLM 调用的 token 用量
+    client = TokenTracker(raw_client, model=cfg.model)
 
     # 加载项目
     if not (project_dir / ".novel").exists():
@@ -567,6 +599,18 @@ def _print_summary(state: AutoState, output: Path) -> None:
     table.add_row("已完成", str(len(state.chapters_done)))
     table.add_row("未达标", str(len(state.chapters_failed)))
     table.add_row("累计字数", f"{state.total_words:,}")
+    table.add_row("累计 token", f"{state.cumulative_tokens:,}")
+    if state.cumulative_prompt_tokens:
+        table.add_row(
+            "  输入/输出 token",
+            f"{state.cumulative_prompt_tokens:,} / {state.cumulative_completion_tokens:,}",
+        )
+    if state.cumulative_cost_cny > 0:
+        cost_str = f"¥{state.cumulative_cost_cny:.3f}"
+        if state.budget_cny > 0:
+            ratio = (state.cumulative_cost_cny / state.budget_cny) * 100
+            cost_str += f" (预算 ¥{state.budget_cny:.2f} 的 {ratio:.0f}%)"
+        table.add_row("估算成本", cost_str)
     table.add_row("用时", str(elapsed))
     table.add_row("输出", str(output))
     console.print(table)
