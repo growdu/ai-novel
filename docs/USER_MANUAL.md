@@ -406,27 +406,21 @@ novel serve         # 默认 http://127.0.0.1:8765
 novel auto my_novel --title "..." --serve  # auto 启动后台仪表盘
 ```
 
-仪表盘显示：
+仪表盘（4 张卡片 + 1 张章节表 + 4 个按钮）：进度 / 字数 / Token / 成本。控制按钮：暂停 / 继续 / 降级 / 停止。控制信号写到 `.novel/auto_control.json`，每章写完后检查。
 
-| 卡片 | 信息 |
-|------|------|
-| 进度 | X/Y + 进度条 + 百分比 |
-| 累计字数 | 当前总产出 |
-| 累计 Token | input / output 分别显示 |
-| 估算成本 | CNY + 预算剩余百分比 |
-| 已用时间 | h:mm:ss |
-| 未达标章节 | 失败计数 |
+### 4.2.6 终端 watch（不开浏览器）
 
-按钮：
+不想开浏览器？直接：
 
-| 按钮 | 效果 |
-|------|------|
-| ⏸ 暂停 | 当前章节写完后停下 |
-| ▶ 继续 | 恢复运行 |
-| ⬇ 降级到 draft | 立即降级 |
-| ■ 停止 | 立即停（写完当前章节后退出）|
+```bash
+novel status --watch              # 完整项目状态
+novel status --watch --auto       # 只看 auto 进度 + 成本
+novel status --watch --interval 5  # 自定义刷新间隔（秒）
+```
 
-控制信号写到 `.novel/auto_control.json`，每章写完后检查。无需重启服务器。
+表格每 2 秒重画（rich.live），Ctrl-C 退出。
+
+不需要浏览器 + 不需要单独终端——直接在跑 `novel auto` 的终端按 Ctrl-Z 挂起、`fg` 恢复，或者开第二个终端。
 
 ### 4.3 写作命令
 

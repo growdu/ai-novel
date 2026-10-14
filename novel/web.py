@@ -77,228 +77,156 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>novel-writer · auto 仪表盘</title>
+<title>novel-writer · auto</title>
 <style>
-  body { font-family: -apple-system, "Segoe UI", "PingFang SC", monospace;
-         background: #0d1117; color: #c9d1d9; padding: 24px; margin: 0; }
-  h1 { color: #58a6ff; margin: 0 0 4px; font-size: 28px; }
-  h2 { color: #8b949e; font-size: 14px; font-weight: normal; margin: 0 0 24px; }
-  .meta { color: #8b949e; font-size: 12px; margin-bottom: 16px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-           gap: 12px; margin-bottom: 24px; }
-  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-          padding: 16px; }
-  .card-title { color: #8b949e; font-size: 11px; text-transform: uppercase;
-                letter-spacing: 0.5px; }
-  .card-value { color: #f0f6fc; font-size: 24px; font-weight: bold;
-                margin-top: 4px; }
-  .card-sub { color: #8b949e; font-size: 11px; margin-top: 4px; }
-  .progress-bar { background: #21262d; border-radius: 6px; height: 24px;
-                  margin: 12px 0; overflow: hidden; }
-  .progress-fill { background: linear-gradient(90deg, #2188ff, #58a6ff);
-                   height: 100%; transition: width 0.5s; display: flex;
-                   align-items: center; justify-content: center;
-                   color: white; font-weight: bold; font-size: 12px; }
-  table { width: 100%; border-collapse: collapse; margin-top: 16px;
-          background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-          overflow: hidden; }
-  th { background: #21262d; color: #8b949e; text-align: left; padding: 8px 12px;
-       font-size: 11px; text-transform: uppercase; }
-  td { padding: 8px 12px; border-top: 1px solid #21262d; font-size: 13px; }
-  tr.failed td { color: #f85149; }
-  tr.done td { color: #3fb950; }
-  tr.pending td { color: #8b949e; }
-  .controls { margin-top: 24px; display: flex; gap: 8px; }
-  button { padding: 8px 16px; border: 1px solid #30363d; background: #21262d;
-           color: #c9d1d9; border-radius: 6px; cursor: pointer;
-           font-family: inherit; font-size: 13px; }
-  button:hover { background: #30363d; }
-  button.primary { background: #2188ff; border-color: #1f6feb; color: white; }
-  button.danger { background: #da3633; border-color: #b62324; color: white; }
-  .error { color: #f85149; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px;
-           font-size: 11px; font-weight: bold; }
-  .badge-running { background: #1f6feb; color: white; }
-  .badge-paused { background: #d29922; color: white; }
-  .badge-done { background: #238636; color: white; }
-  .badge-failed { background: #da3633; color: white; }
-  .live-dot { display: inline-block; width: 8px; height: 8px;
-              background: #3fb950; border-radius: 50%; margin-right: 6px;
-              animation: pulse 2s infinite; }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  body { font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, monospace;
+         background: #fafafa; color: #222; padding: 20px; max-width: 800px;
+         margin: 0 auto; line-height: 1.4; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 12px; color: #888; font-weight: normal; margin: 0 0 16px; }
+  .meta { font-size: 11px; color: #999; margin-bottom: 16px; }
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr);
+           gap: 12px; margin-bottom: 16px; }
+  .card { background: white; border: 1px solid #e5e5e5;
+          border-radius: 4px; padding: 12px; }
+  .card-label { font-size: 11px; color: #888; }
+  .card-value { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .card-sub { font-size: 11px; color: #999; margin-top: 2px; }
+  .bar { background: #e5e5e5; height: 18px; border-radius: 2px; margin: 6px 0;
+         overflow: hidden; }
+  .bar-fill { background: #4a9eff; height: 100%; color: white; font-size: 11px;
+              display: flex; align-items: center; justify-content: center; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px;
+          background: white; border: 1px solid #e5e5e5;
+          border-radius: 4px; font-size: 12px; }
+  th, td { padding: 6px 10px; text-align: left; }
+  th { background: #f5f5f5; color: #666; font-weight: 600; }
+  td { border-top: 1px solid #f0f0f0; }
+  tr.failed { color: #c00; }
+  tr.done { color: #080; }
+  .controls { margin: 12px 0; }
+  button { padding: 6px 12px; border: 1px solid #ccc; background: white;
+           font-family: inherit; font-size: 12px; cursor: pointer;
+           margin-right: 4px; border-radius: 3px; }
+  button:hover { background: #f5f5f5; }
+  button.stop { color: #c00; border-color: #c00; }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 2px;
+           font-size: 10px; }
+  .badge-done { background: #dfd; color: #040; }
+  .badge-running { background: #def; color: #048; }
+  .badge-failed { background: #fdd; color: #400; }
+  .badge-pending { background: #eee; color: #666; }
+  .error { color: #c00; font-size: 12px; }
 </style>
 </head>
 <body>
-<h1 id="title">novel-writer auto 仪表盘</h1>
-<h2><span class="live-dot"></span><span id="phase">加载中…</span></h2>
-
+<h1 id="title">novel-writer auto</h1>
+<h2>阶段: <span id="phase">-</span></h2>
 <div class="meta">
-  <span id="meta-path"></span>
-  &nbsp;·&nbsp; 刷新: <span id="meta-time">-</span>
-  &nbsp;·&nbsp; <span id="meta-model"></span>
+  <span id="meta-path"></span> · <span id="meta-time">-</span>
 </div>
 
 <div class="cards">
   <div class="card">
-    <div class="card-title">进度</div>
-    <div class="card-value" id="progress-value">0 / 0</div>
-    <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%">0%</div></div>
+    <div class="card-label">进度</div>
+    <div class="card-value" id="progress-value">-</div>
+    <div class="bar"><div class="bar-fill" id="progress-fill" style="width:0%">0%</div></div>
   </div>
   <div class="card">
-    <div class="card-title">累计字数</div>
-    <div class="card-value" id="card-words">0</div>
+    <div class="card-label">字数</div>
+    <div class="card-value" id="card-words">-</div>
   </div>
   <div class="card">
-    <div class="card-title">累计 Token</div>
-    <div class="card-value" id="card-tokens">0</div>
+    <div class="card-label">Token</div>
+    <div class="card-value" id="card-tokens">-</div>
     <div class="card-sub" id="card-tokens-split">-</div>
   </div>
   <div class="card">
-    <div class="card-title">估算成本</div>
-    <div class="card-value" id="card-cost">¥0.00</div>
-    <div class="card-sub" id="card-budget"></div>
-  </div>
-  <div class="card">
-    <div class="card-title">已用时间</div>
-    <div class="card-value" id="card-elapsed">-</div>
-  </div>
-  <div class="card">
-    <div class="card-title">未达标章节</div>
-    <div class="card-value" id="card-failed">0</div>
+    <div class="card-label">成本</div>
+    <div class="card-value" id="card-cost">-</div>
+    <div class="card-sub" id="card-budget">-</div>
   </div>
 </div>
 
 <div class="controls">
-  <button class="primary" id="btn-pause">⏸ 暂停</button>
-  <button id="btn-resume">▶ 继续</button>
-  <button id="btn-downgrade">⬇ 降级到 draft</button>
-  <button class="danger" id="btn-stop">■ 停止</button>
+  <button id="btn-pause">暂停</button>
+  <button id="btn-resume">继续</button>
+  <button id="btn-downgrade">降级</button>
+  <button class="stop" id="btn-stop">停止</button>
 </div>
 
 <table>
 <thead>
-<tr><th>章节</th><th>状态</th><th>字数</th><th>迭代</th><th>Token</th><th>AI 味</th><th>雷达</th><th>耗时</th></tr>
+<tr><th>章</th><th>状态</th><th>字</th><th>AI</th><th>雷达</th><th>耗时</th></tr>
 </thead>
 <tbody id="chapter-tbody"></tbody>
 </table>
 
+<div id="error-msg" class="error"></div>
+
 <script>
-let lastState = null;
-
-function fmt(n) { return Number(n).toLocaleString(); }
-function badge(status) {
-  const m = {
-    'generated': '<span class="badge badge-done">done</span>',
-    'polished': '<span class="badge badge-done">polished</span>',
-    'failed': '<span class="badge badge-failed">failed</span>',
-    'pending': '<span class="badge badge-paused">pending</span>',
-    'running': '<span class="badge badge-running">running</span>',
-  };
-  return m[status] || status;
+function badge(s) {
+  return '<span class="badge badge-' + s + '">' + s + '</span>';
 }
-
 async function fetchState() {
   try {
     const r = await fetch('/api/state');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
     const s = await r.json();
     if (s.error) {
-      document.getElementById('phase').innerHTML =
-        '<span class="error">⚠ ' + s.error + '</span>';
+      document.getElementById('error-msg').textContent = s.error;
       return;
     }
-    renderState(s);
+    document.getElementById('error-msg').textContent = '';
+    document.getElementById('title').textContent = (s.spec.title || '?') + ' · novel-writer auto';
+    document.getElementById('phase').textContent = s.phase;
+    document.getElementById('meta-path').textContent = s.project_root || '';
+    document.getElementById('meta-time').textContent = new Date().toLocaleTimeString();
+
+    const done = s.chapters_done_count || 0;
+    const total = s.chapters_total || 0;
+    document.getElementById('progress-value').textContent = done + ' / ' + total;
+    const pct = total ? Math.round(done * 100 / total) : 0;
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-fill').textContent = pct + '%';
+
+    document.getElementById('card-words').textContent = (s.total_words || 0).toLocaleString();
+    document.getElementById('card-tokens').textContent = (s.cumulative_tokens || 0).toLocaleString();
+    document.getElementById('card-tokens-split').textContent = s.cumulative_prompt_tokens
+      ? 'in ' + s.cumulative_prompt_tokens.toLocaleString() + ' / out ' + s.cumulative_completion_tokens.toLocaleString()
+      : '-';
+    document.getElementById('card-cost').textContent = '¥' + (s.cumulative_cost_cny || 0).toFixed(2);
+    document.getElementById('card-budget').textContent = s.budget_cny > 0
+      ? '预算 ¥' + s.budget_cny.toFixed(2) + ' · ' + Math.max(0, Math.round((1 - s.cumulative_cost_cny / s.budget_cny) * 100)) + '% 余'
+      : '无限制';
+
+    const tbody = document.getElementById('chapter-tbody');
+    tbody.innerHTML = (s.chapters || []).map(ch => {
+      const cls = ch.status === 'generated' || ch.status === 'polished' ? 'done' :
+                  ch.status === 'failed' ? 'failed' : 'pending';
+      const elapsed = ch.elapsed_ms ? Math.round(ch.elapsed_ms / 60000) + 'min' : '-';
+      return '<tr class="' + cls + '"><td>' + ch.chapter_no + '</td>'
+        + '<td>' + badge(ch.status || 'pending') + '</td>'
+        + '<td>' + (ch.word_count || 0) + '</td>'
+        + '<td>' + (ch.ai_flavor != null ? ch.ai_flavor : '-') + '</td>'
+        + '<td>' + (ch.radar != null ? ch.radar : '-') + '</td>'
+        + '<td>' + elapsed + '</td></tr>';
+    }).join('');
   } catch (e) {
-    document.getElementById('phase').innerHTML =
-      '<span class="error">⚠ ' + e.message + '</span>';
+    document.getElementById('error-msg').textContent = e.message;
   }
 }
-
-function renderState(s) {
-  lastState = s;
-  document.getElementById('title').textContent = (s.spec.title || '?') + ' · novel-writer auto';
-  const phaseBadge = s.phase === 'done' ? 'badge-done' :
-                     s.phase === 'failed' ? 'badge-failed' : 'badge-running';
-  document.getElementById('phase').innerHTML =
-    '<span class="badge ' + phaseBadge + '">' + s.phase + '</span> · ' +
-    (s.planning_files_count || 0) + ' 个规划文件';
-  document.getElementById('meta-path').textContent = s.project_root || '';
-  document.getElementById('meta-time').textContent = new Date().toLocaleTimeString();
-  document.getElementById('meta-model').textContent = s.model ? 'model=' + s.model : '';
-
-  const done = s.chapters_done_count || 0;
-  const total = s.chapters_total || 0;
-  document.getElementById('progress-value').textContent = done + ' / ' + total;
-  const pct = total > 0 ? Math.round(done * 100 / total) : 0;
-  document.getElementById('progress-fill').style.width = pct + '%';
-  document.getElementById('progress-fill').textContent = pct + '%';
-
-  document.getElementById('card-words').textContent = fmt(s.total_words || 0);
-  document.getElementById('card-tokens').textContent = fmt(s.cumulative_tokens || 0);
-  if (s.cumulative_prompt_tokens) {
-    document.getElementById('card-tokens-split').textContent =
-      'in ' + fmt(s.cumulative_prompt_tokens) + ' / out ' + fmt(s.cumulative_completion_tokens);
-  }
-  document.getElementById('card-cost').textContent = '¥' + (s.cumulative_cost_cny || 0).toFixed(3);
-  if (s.budget_cny > 0) {
-    const r = ((s.budget_cny - s.cumulative_cost_cny) / s.budget_cny * 100).toFixed(0);
-    document.getElementById('card-budget').textContent =
-      '预算 ¥' + s.budget_cny.toFixed(2) + ' · ' + r + '% remaining';
-  } else {
-    document.getElementById('card-budget').textContent = '无预算限制';
-  }
-
-  // 已用时间
-  if (s.elapsed_s) {
-    const h = Math.floor(s.elapsed_s / 3600);
-    const m = Math.floor((s.elapsed_s % 3600) / 60);
-    const sec = Math.floor(s.elapsed_s % 60);
-    document.getElementById('card-elapsed').textContent =
-      h + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
-  }
-
-  document.getElementById('card-failed').textContent = s.chapters_failed_count || 0;
-
-  // 章节表
-  const tbody = document.getElementById('chapter-tbody');
-  tbody.innerHTML = '';
-  for (const ch of (s.chapters || [])) {
-    const tr = document.createElement('tr');
-    tr.className = ch.status || 'pending';
-    const elapsedMin = ch.elapsed_ms ? (ch.elapsed_ms / 60000).toFixed(1) + 'min' : '-';
-    tr.innerHTML = '<td>' + ch.chapter_no + '</td>'
-      + '<td>' + badge(ch.status) + '</td>'
-      + '<td>' + (ch.word_count || 0) + '</td>'
-      + '<td>' + (ch.iterations || 0) + '</td>'
-      + '<td>' + (ch.total_tokens || 0) + '</td>'
-      + '<td>' + (ch.ai_flavor != null ? ch.ai_flavor : '-') + '</td>'
-      + '<td>' + (ch.radar != null ? ch.radar : '-') + '</td>'
-      + '<td>' + elapsedMin + '</td>';
-    tbody.appendChild(tr);
-  }
+async function ctrl(sig) {
+  await fetch('/api/control', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({signal: sig}),
+  });
+  fetchState();
 }
-
-async function postControl(signal) {
-  try {
-    const r = await fetch('/api/control', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({signal: signal}),
-    });
-    if (r.ok) {
-      console.log('control sent:', signal);
-      fetchState();
-    }
-  } catch (e) {
-    alert('control failed: ' + e.message);
-  }
-}
-
-document.getElementById('btn-pause').onclick = () => postControl('pause');
-document.getElementById('btn-resume').onclick = () => postControl('run');
-document.getElementById('btn-downgrade').onclick = () => postControl('downgrade');
-document.getElementById('btn-stop').onclick = () => postControl('stop');
-
+document.getElementById('btn-pause').onclick = () => ctrl('pause');
+document.getElementById('btn-resume').onclick = () => ctrl('run');
+document.getElementById('btn-downgrade').onclick = () => ctrl('downgrade');
+document.getElementById('btn-stop').onclick = () => ctrl('stop');
 fetchState();
 setInterval(fetchState, 2000);
 </script>

@@ -2,12 +2,14 @@
 from __future__ import annotations
 import os
 import sys
+import time
 from pathlib import Path
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
+from rich.live import Live
 from novel import __version__
 from novel.config import load_global
 from novel import storage as S
@@ -1439,8 +1441,12 @@ def foreshadow():
     console.print("[green]已保存[/green] " + str(proj.foreshadowing_path))
 
 @app.command()
-def status():
-    """查看当前项目的状态。"""
+def status(
+    watch: bool = typer.Option(False, "--watch", "-w", help="每 2 秒刷新一次（无需浏览器）"),
+    interval: float = typer.Option(2.0, "--interval", help="--watch 模式的刷新间隔（秒）"),
+    auto_only: bool = typer.Option(False, "--auto", help="只显示 novel auto 的状态（章节进度 + 成本）"),
+):
+    """查看当前项目的状态。--watch 持续刷新表格，无需 Web 仪表盘。"""
     proj = S.load_project()
     table = Table(title="项目: %s" % proj.title)
     table.add_column("项")
@@ -1470,6 +1476,91 @@ def status():
         wc = S.chapter_word_count(text)
         table.add_row("  - " + ch.name, str(wc) + " 字")
     console.print(table)
+
+    if auto_only:
+        _print_auto_status(proj)
+
+    if watch:
+        _watch_status(proj, interval=interval, auto_only=auto_only)
+
+
+def _print_auto_status(proj):
+    """--auto 单次输出 auto 状态表。"""
+    from novel.auto_state import AutoState
+    state = AutoState.load(proj.root)
+    t = Table(title=f"auto · {proj.title}", show_header=False)
+    t.add_column("指标")
+    t.add_column("值")
+    if state is None:
+        t.add_row("状态", "未运行 novel auto")
+    else:
+        t.add_row("阶段", state.phase.value)
+        if state.chapters_total:
+            t.add_row("已完成", f"{len(state.chapters_done)}/{state.chapters_total}")
+        t.add_row("累计字数", f"{state.total_words:,}")
+        t.add_row("累计 token", f"{state.cumulative_tokens:,}")
+        if state.cumulative_cost_cny > 0:
+            cost_str = f"¥{state.cumulative_cost_cny:.3f}"
+            if state.budget_cny > 0:
+                cost_str += f" / ¥{state.budget_cny:.2f}"
+            t.add_row("成本", cost_str)
+        elapsed = int(state.updated_at - state.started_at)
+        h, m, sec = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
+        t.add_row("用时", f"{h}:{m:02d}:{sec:02d}")
+    console.print(t)
+
+
+def _watch_status(proj, interval: float = 2.0, auto_only: bool = False):
+    """持续刷新状态表。Ctrl-C 退出。"""
+    from novel.auto_state import AutoState
+    from rich.live import Live
+
+    console.print(f"[dim]每 {interval}s 刷新一次 · Ctrl-C 退出[/dim]")
+
+    def build_live_table() -> Table:
+        if auto_only:
+            state = AutoState.load(proj.root)
+            t = Table(title=f"auto · {proj.title}", show_header=True)
+            t.add_column("指标")
+            t.add_column("值")
+            if state is None:
+                t.add_row("状态", "未运行 novel auto")
+                return t
+            t.add_row("阶段", state.phase.value)
+            t.add_row("已完成", f"{len(state.chapters_done)}/{state.chapters_total}")
+            t.add_row("累计字数", f"{state.total_words:,}")
+            t.add_row("累计 token", f"{state.cumulative_tokens:,}")
+            if state.cumulative_cost_cny > 0:
+                cost_str = f"¥{state.cumulative_cost_cny:.3f}"
+                if state.budget_cny > 0:
+                    cost_str += f" / ¥{state.budget_cny:.2f}"
+                t.add_row("成本", cost_str)
+            elapsed = int(state.updated_at - state.started_at)
+            h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
+            t.add_row("用时", f"{h}:{m:02d}:{s:02d}")
+            return t
+
+        # 默认：原 status 表 + 自动机信息
+        t = Table(title=f"项目: {proj.title}", show_header=False)
+        t.add_column("项")
+        t.add_column("值")
+        # 自动加载状态
+        state = AutoState.load(proj.root)
+        if state:
+            t.add_row("auto 阶段", state.phase.value)
+            if state.chapters_total:
+                t.add_row("auto 进度", f"{len(state.chapters_done)}/{state.chapters_total}")
+            if state.cumulative_cost_cny > 0:
+                t.add_row("auto 成本", f"¥{state.cumulative_cost_cny:.3f}")
+        return t
+
+    with Live(build_live_table(), refresh_per_second=1 / max(0.5, interval), console=console) as live:
+        try:
+            while True:
+                time.sleep(interval)
+                live.update(build_live_table())
+        except KeyboardInterrupt:
+            console.print("[dim]已停止 watch[/dim]")
 
 
 @app.command(name="list")
