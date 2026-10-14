@@ -251,6 +251,40 @@ novel adapt \
 cat .novel/adapt.md
 ```
 
+### 教程 5：两阶段工作流（先大纲后正文）
+
+100 万字 / 333 章的大长篇，推荐先批量生成所有章纲，审核/调整后再自动写正文：
+
+```bash
+# 阶段 A：生成全书 + 所有章纲
+cd xiuxian
+novel outline                  # 1. 生成全书大纲（333 章粗规划）
+novel plan-all                # 2. 批量生成所有章纲（每个 200-400 字）
+
+# 阶段 B：审核 / 调整
+novel plans                   # 列表所有章纲（章号 + 摘要）
+novel plans 5                # 查看第 5 章章纲
+novel plans 5 --refresh --extra "本卷节奏偏快，加心理描写"  # 改后重生成
+novel plans 100 --refresh    # 单独刷新某章
+
+# 阶段 C：自动写正文（用已有章纲）
+novel auto . --resume --serve \
+  --title "凡人仙途" --theme "..." \
+  --genre 修仙 --style 经典爽文 \
+  --words 1000000 --quality premium --budget 120 \
+  --skip-plans                # ← 关键：跳过规划阶段
+```
+
+参数速查：
+
+| 命令 / 标志 | 作用 |
+|---|---|
+| `novel plan-all` | 批量生成缺失的章纲（按 outline 数章节）|
+| `--plans-only` | auto 只生成章纲，不进入写作 |
+| `novel plans [N]` | 列出 / 查看章纲 |
+| `novel plans N --refresh` | 重新生成第 N 章 |
+| `novel auto --skip-plans` | 跳过规划阶段，直接写正文（用现有章纲）|
+
 ### 教程 5：一键全自动（novel auto）
 
 ```mermaid

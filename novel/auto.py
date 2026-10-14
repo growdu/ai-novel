@@ -529,6 +529,8 @@ def run_auto_novel(
     cfg: GlobalConfig | None = None,
     state: AutoState | None = None,
     budget_cny: float = 0.0,
+    plans_only: bool = False,
+    skip_plans: bool = False,
 ) -> Path:
     """一键全自动写小说主入口。
 
@@ -538,6 +540,8 @@ def run_auto_novel(
         cfg: cfg 全局配置（默认 .env 加载）。
         state: 现有状态（None 表示新跑；非 None 用于续跑）。
         budget_cny: 预算上限（CNY）。0 = 不限制。
+        plans_only: 只跑规划阶段（生成 outline + 所有章纲），生成完后停。
+        skip_plans: 跳过规划阶段，直接进入写作（用现有 outline/chapter_plans）。
 
     Returns:
         导出文件的绝对路径（book.md）。
@@ -589,7 +593,7 @@ def run_auto_novel(
         )
 
     try:
-        if state.phase.value in (Phase.PLANNING.value, "draft"):
+        if state.phase.value in (Phase.PLANNING.value, "draft") and not skip_plans:
             _planning_phase(spec, project, client, state)
         if state.phase.value in (
             Phase.PLANNING.value, Phase.WRITING.value, "draft",
@@ -598,11 +602,13 @@ def run_auto_novel(
         if state.phase.value in (
             Phase.WRITING.value, Phase.POLISHING.value,
         ):
-            _polishing_phase(spec, project, client, state)
+            if not plans_only:
+                _polishing_phase(spec, project, client, state)
         if state.phase.value in (
             Phase.POLISHING.value, Phase.CONSISTENCY.value,
         ):
-            _consistency_phase(spec, project, client, state)
+            if not plans_only:
+                _consistency_phase(spec, project, client, state)
         if state.phase.value in (
             Phase.CONSISTENCY.value, Phase.EXPORTING.value,
         ):
@@ -618,6 +624,15 @@ def run_auto_novel(
         state.last_error = str(e)
         state.save(project_dir)
         raise
+
+    if plans_only:
+        # 只跑规划，标记阶段为 finished 提示
+        state.phase = Phase.POLISHING  # 下一个待运行阶段
+        state.save(project_dir)
+        console.print("[green]✓ 规划阶段完成（章纲已生成）[/green]")
+        console.print(f"  章纲目录: {project_dir / '.novel' / 'chapter_plans'}")
+        console.print("  [dim]下一步：review 章纲后，跑 `novel auto ... --skip-plans` 进入写作阶段[/dim]")
+        return project_dir / "book.md"  # 不存在也无所谓
 
     # 汇总
     _print_summary(state, out)

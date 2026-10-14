@@ -157,6 +157,46 @@ def generate_chapter_plan(project, chapter_no, client=None, feedback=""):
     p.write_text("# 第 %d 章细化大纲\n\n" % chapter_no + res.content + "\n", encoding="utf-8")
     return res.content
 
+
+def batch_generate_chapter_plans(project, start: int = 1, end: int = 0, client=None, feedback: str = "", verbose: bool = True):
+    """批量生成章节细化大纲。
+
+    Args:
+        start, end: 范围（含），end=0 表示用 outline 自动识别总章数
+        client: 共享 LLMClient/TokenTracker（可选）
+        feedback: 传递给所有章节的额外反馈（如 "本卷节奏偏快"）
+        verbose: 打印每章进度
+
+    Returns:
+        dict {chapter_no: plan_content or None}，失败章节映射为 None
+    """
+    if end <= 0:
+        # 自动从 outline 数章节：找"第N章"出现次数
+        outline_blob = project.outline_path.read_text(encoding="utf-8") if project.outline_path.exists() else ""
+        end = max(start, _count_chapters_in_outline(outline_blob))
+    results: dict[int, str | None] = {}
+    for n in range(start, end + 1):
+        try:
+            content = generate_chapter_plan(project, n, client=client, feedback=feedback)
+            results[n] = content
+            if verbose:
+                print(f"  [green]✓[/green] 第 {n} 章细化大纲生成完成")
+        except Exception as e:
+            results[n] = None
+            if verbose:
+                print(f"  [yellow]✗[/yellow] 第 {n} 章失败：{e}")
+    return results
+
+
+import re as _re
+_CHAPTER_COUNT_RE = _re.compile(r"\*\*第([一二三四五六七八九十百千零0-9]+)章")
+
+def _count_chapters_in_outline(outline_text: str) -> int:
+    """从 outline.md 数章节数（数 **第N章** 出现次数）。"""
+    if not outline_text:
+        return 0
+    return len(_CHAPTER_COUNT_RE.findall(outline_text))
+
 def expand_scene(project, chapter_no, after_text, instruction, client=None, target_words=800):
     """交互式扩展：在 after_text 之后接写一段新场景。"""
     client = client or LLMClient(GlobalConfig())

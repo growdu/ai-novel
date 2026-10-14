@@ -481,6 +481,132 @@ def plan(no: int = typer.Argument(..., help="章节号")):
     console.print(Panel(res, title="第 %d 章细化大纲" % no))
     console.print("[green]已保存到[/green] " + str(proj.novel_dir / "chapter_plans" / ("%04d.md" % no)))
 
+
+@app.command(name="plan-all")
+def plan_all_cmd(
+    start: int = typer.Option(1, "--start", "-s", help="起始章节"),
+    end: int = typer.Option(0, "--end", "-e", help="结束章节（0 = 按 outline 自动）"),
+    refresh: bool = typer.Option(False, "--refresh", help="强制重新生成已有章纲"),
+    extra: str = typer.Option("", "--extra", help="传给每章的额外反馈（如 '本卷节奏偏快'）"),
+):
+    """批量生成所有章节的细化大纲（200-400 字场景规划）。
+
+    与 novel plan N 的关系：plan N 只生成一章；plan-all 一键生成全部。
+    推荐先用 plan-all 让用户先看到全本规划，再决定写哪几章。
+    """
+    proj = S.load_project()
+    cfg = load_global()
+    if not refresh:
+        # 计算已有章纲
+        plans_dir = proj.novel_dir / "chapter_plans"
+        if plans_dir.exists():
+            # 跳过已生成的（最小要求：文件存在且 > 50 字）
+            missing = []
+            target_end = end if end > 0 else _G_count_chapters(proj)
+            for n in range(start, target_end + 1):
+                p = plans_dir / ("%04d.md" % n)
+                if not p.exists() or p.stat().st_size < 50:
+                    missing.append(n)
+            if not missing:
+                console.print(f"[green]所有章纲已存在（{start}-{target_end}）。用 --refresh 强制重生成。[/green]")
+                return
+            console.print(f"批量生成 {len(missing)} 章细化大纲（{start}-{target_end} 中缺失部分）...")
+            start = missing[0]
+            end = missing[-1]
+            return _do_plan_all(proj, cfg, start, end, extra)
+    if end <= 0:
+        end = _G_count_chapters(proj)
+    if end < start:
+        console.print(f"[yellow]end ({end}) < start ({start})，无章节可生成[/yellow]")
+        return
+    console.print(f"批量生成第 {start}-{end} 章细化大纲...")
+    _do_plan_all(proj, cfg, start, end, extra)
+
+
+def _G_count_chapters(proj) -> int:
+    """从 outline 自动识别总章节数。"""
+    import re
+    if not proj.outline_path.exists():
+        return 0
+    text = proj.outline_path.read_text(encoding="utf-8")
+    matches = re.findall(r"\*\*第([一二三四五六七八九十百千零0-9]+)章", text)
+    return len(matches)
+
+
+def _do_plan_all(proj, cfg, start, end, extra):
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    client = LLMClient(cfg)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task_id = progress.add_task("批量细化章纲", total=end - start + 1)
+        for n in range(start, end + 1):
+            try:
+                G.generate_chapter_plan(proj, n, client=client, feedback=extra)
+            except Exception as e:
+                console.print(f"  [yellow]第 {n} 章失败：{e}[/yellow]")
+            progress.update(task_id, advance=1)
+
+
+@app.command(name="plans")
+def plans_cmd(
+    no: int = typer.Argument(None, help="查看指定章节号（默认列表）"),
+    refresh: bool = typer.Option(False, "--refresh", help="重新生成指定章的章纲"),
+    extra: str = typer.Option("", "--extra", help="给 --refresh 用的提示"),
+    lines: int = typer.Option(10, "--lines", "-l", help="查看时每章显示几行"),
+):
+    """查看 / 刷新已生成的章节细化大纲。
+
+    - 不带 [N]：列出所有章纲的摘要（章号 + 前几行）
+    - 带 [N]：显示指定章的完整章纲
+    - --refresh N：重新生成指定章的章纲（用户改了人物 / 大纲后用）
+    """
+    proj = S.load_project()
+    if refresh and no is None:
+        console.print("[red]--refresh 必须指定章节号[/red]")
+        raise typer.Exit(1)
+    if refresh and no is not None:
+        cfg = load_global()
+        res = G.generate_chapter_plan(proj, no, client=LLMClient(cfg), feedback=extra)
+        console.print(Panel(res, title=f"第 {no} 章细化大纲（已刷新）"))
+        return
+    # 列表 / 新增
+    plans_dir = proj.novel_dir / "chapter_plans"
+    if not plans_dir.exists():
+        console.print("[yellow]还没有任何章纲。运行 `novel plan-all` 批量生成。[/yellow]")
+        return
+    files = sorted(plans_dir.glob("[0-9]*.md"))
+    if not files:
+        console.print("[yellow]还没有任何章纲。运行 `novel plan-all` 批量生成。[/yellow]")
+        return
+    if no is not None:
+        # 查看指定章
+        target = plans_dir / ("%04d.md" % no)
+        if not target.exists():
+            console.print(f"[red]第 {no} 章章纲不存在[/red]")
+            console.print(f"  [dim]运行：novel plan-all 或 novel plan {no}[/dim]")
+            raise typer.Exit(1)
+        console.print(Panel(target.read_text(encoding="utf-8"), title=f"第 {no} 章细化大纲"))
+        return
+    # 列表模式
+    table = Table(title=f"章节细化大纲（共 {len(files)} 章）", show_header=True)
+    table.add_column("章号", style="cyan", width=6)
+    table.add_column("字数", width=4, justify="right")
+    table.add_column("前几行")
+    for f in files:
+        n = int(f.stem)
+        text = f.read_text(encoding="utf-8")
+        first_lines = "\n".join(text.splitlines()[:lines]).strip()
+        if len(first_lines) > 60:
+            first_lines = first_lines[:57] + "..."
+        table.add_row(str(n), str(len(text)), first_lines)
+    console.print(table)
+
 @app.command()
 def doctor(
     fix: bool = typer.Option(False, "--fix", help="尝试自动修复可处理的问题（占位文件/缺失目录）"),
@@ -1700,6 +1826,8 @@ def auto(
     force: bool = False,
     serve: bool = typer.Option(False, "--serve", help="同时启动 Web 仪表盘"),
     serve_port: int = typer.Option(8765, "--serve-port", help="仪表盘端口"),
+    plans_only: bool = typer.Option(False, "--plans-only", help="只跑规划阶段（生成所有章纲），不进入写作"),
+    skip_plans: bool = typer.Option(False, "--skip-plans", help="跳过规划阶段，直接进入写作（用现有章纲）"),
 ):
     """一键全自动写小说：给定最小信息，自动跑完规划→写作→润色→一致性→导出。
 
@@ -1812,6 +1940,8 @@ def auto(
         out = run_auto_novel(
             spec, proj.root, cfg=cfg,
             resume=effective_resume, budget_cny=budget,
+            plans_only=plans_only,
+            skip_plans=skip_plans,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]用户中断。再次运行 novel auto 自动续跑。[/yellow]")
