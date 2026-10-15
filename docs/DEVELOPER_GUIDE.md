@@ -3,6 +3,9 @@
 > 面向维护 / 二次开发 / 新功能贡献者的代码导览。
 > 读完本文档应该能在 30 分钟内找到任何功能的实现位置、调用关系、修改方式。
 
+> **代码版本**：v0.12（2026-XX）  
+> **关键变更**：新增 `novel write` 顶层命令（novel_cli.py:236）+ `auto.spec_from_project` helper（novel/auto.py:534）。删除了 `plan` / `plan-all` / `plans` / `sprint` / `batch` / 旧的 `write` 命令。详见 [§9. v0.12 端到端定位实现](#9-v012-端到端定位实现)。
+
 ---
 
 ## 目录
@@ -15,6 +18,7 @@
 6. [扩展指南](#6-扩展指南)
 7. [测试架构](#7-测试架构)
 8. [维护者排查手册](#8-维护者排查手册)
+9. [v0.12 端到端定位实现](#9-v012-端到端定位实现)
 
 ---
 
@@ -100,11 +104,12 @@ graph TB
 
 | 模块 | 行数 | 责任 |
 |---|---|---|
-| `novel_cli.py` | 1900+ | 47 命令注册 + Typer 集成 |
+| `novel_cli.py` | ~1900 | 45 命令注册 + Typer 集成（含 `novel write` 顶层入口） |
+| `novel/templates.py` | 200 | 10 个推荐模板 + `apply_template()`（过滤 None override） |
 | `novel/generator.py` | 660 | 写章节、伏笔、人物、世界 |
 | `novel/prompts.py` | 470 | 28 个 builder 函数 |
 | `novel/llm.py` | 250 | LLM HTTP + think 剥离 + 续写 |
-| `novel/auto.py` | 580 | 全自动编排器 |
+| `novel/auto.py` | 610 | 全自动编排器（含 `spec_from_project` helper） |
 | `novel/web.py` | 350 | HTTP 仪表盘 |
 | `novel/auto_state.py` | 220 | 状态机 dataclass |
 | `novel/storage.py` | 195 | 项目/章节文件 I/O |
@@ -113,8 +118,8 @@ graph TB
 | `novel/token_tracker.py` | 95 | LLMClient 包装 |
 | `novel/diff_utils.py` | 35 | difflib 封装 |
 | `novel/config.py` | 110 | .env 加载 + env helpers |
-| `novel/__init__.py` | 4 | 导出 __version__ |
-| **合计** | **~5000** | |
+| `novel/__init__.py` | 4 | 导出 `__version__ = "0.12.0"` |
+| **合计** | **~5300** | |
 
 ### 1.4 提示词目录（28 个）
 
@@ -1566,21 +1571,23 @@ cat .novel/timeline.md
 novel check
 ```
 
-### 8.3 novel auto 跑到一半崩了？
+### 8.3 novel write / novel auto 中途崩了？
 
 ```bash
 # 1. 看 state 当前阶段 + 已完成章节
 cat .novel/auto_state.json | python3 -m json.tool | head -50
 
-# 2. 续跑（自动检测）
+# 2. 续跑（自动检测；底层是 run_auto_novel 加载 .novel/auto_state.json）
 cd /path/to/project
-novel auto . --title "..." --theme "..."  # 自动从中断处继续
+novel write . --title "..." --theme "..."  # 推荐入口
+# 等价：
+novel auto . --title "..." --theme "..."   # 底层入口
 
-# 3. 显式续跑
-novel auto . ... --resume
+# 3. 完全重头（覆盖旧进度）
+novel write . ... --fresh
 
-# 4. 完全重头
-novel auto . ... --fresh
+# 注：v0.11 的 --resume 已改为自动检测
+#      （修了一个 resume= → state= 的 TypeError 隐患，见 novel_cli.py:1967 提交 332b835）
 ```
 
 ### 8.4 提示词改了不生效？
@@ -1697,6 +1704,131 @@ import novel.auto
 print('all imports OK')
 "
 ```
+
+---
+
+## 9. v0.12 端到端定位实现
+
+### 9.1 novel write 顶层入口
+
+**位置**：`novel_cli.py:236`（`@app.command(name="write")`）
+
+两条工作流分支都封装在这一个 typer 函数里。**关键设计选择**：
+
+| 关注点 | 设计 | 原因 |
+|---|---|---|
+| 输入校验 | `--title` 与 `--from-source` 都可省，但**至少其一** | 单写一行可触发，但用户不能「什么都不指定」就跑 |
+| 标题覆盖 | `--from-source` + `--title`：用 `--title` 替代 auto-derived 标题 | mock-source 给出默认标题"基于《X》的方向"，用户可改名 |
+| 模板快速入口 | `--template` 走 init `--template` 的同款 `apply_template()` 逻辑 | 复用 None 过滤修复（避免重复 bug） |
+| 内部 helper | 抽出 `_run_auto_via_spec(spec, project_dir, cfg, ...)` 处理 `--serve` + `run_auto_novel()` | 需求驱动与模仿驱动共用同一 helper |
+
+### 9.2 spec_from_project helper
+
+**位置**：`novel/auto.py:534`
+
+```python
+def spec_from_project(
+    project_dir: Path,
+    quality: QualityPreset = QualityPreset.PREMIUM,
+    target_chapters: int = 0,
+) -> _AutoSpec:
+    proj = S.load_project(project_dir)
+    meta = proj.meta or {}
+    target_words = int(meta.get("target_words") or 100000)
+    return _AutoSpec(
+        title=proj.title,
+        theme=meta.get("theme", ""),
+        genre=meta.get("genre", "现实 / 严肃文学"),
+        style=meta.get("style_preset", ""),
+        target_words=target_words,
+        target_chapters=target_chapters,  # 0 → AutoSpec.__post_init__ 自动算
+        quality=quality,
+    )
+```
+
+**使用场景**：CLI 里如果先 `init --template X` 再 `write --quality premium`，可以用这个 helper 复用 init 时写入的元数据，避免重复输入。
+
+### 9.3 删除命令的代码清理
+
+#### 9.3.1 `plan` / `plan-all` / `plans` / `sprint` / `batch` / 旧 `write`
+
+删除前 `novel_cli.py` 有 ~200 行手动 chapter 控制代码（plan-all 循环 + sprint 调 write + batch 4 分支）。删除后：
+
+- `_planning_phase`（`novel/auto.py:96`）自动批量化生成 outline / characters / world / volumes / chapter_plans
+- `auto` 续跑自动跳过已写章节（`_writing_phase` 调 `state.is_chapter_done(n)`）
+- `_polishing_phase` / `_consistency_phase` 替代 `batch` 的 4 个分支
+- `novel write` 顶层入口替代旧 `write --start --end` 的功能
+
+**测试同步清理**：删除 `tests/test_plan_all.py`（8 个失效测试用例）。新增 `tests/test_write.py`（8 个用例）。
+
+#### 9.3.2 隐藏 bug 修复（commit 332b835）
+
+`novel_cli.py` 调用 `run_auto_novel()` 时错传 `resume=`（应为 `state=`）。
+
+```python
+# 修复前（潜在 TypeError）
+out = run_auto_novel(spec, proj.root, cfg=cfg,
+                     resume=effective_resume, budget_cny=budget,
+                     plans_only=plans_only, skip_plans=skip_plans)
+
+# 修复后（state=None 让 run_auto_novel 从 .novel/auto_state.json 自动加载）
+out = run_auto_novel(spec, proj.root, cfg=cfg,
+                     budget_cny=budget,
+                     plans_only=plans_only, skip_plans=skip_plans)
+```
+
+### 9.4 模仿驱动的实现要点
+
+**`novel_cli.py:298-356`**：
+
+```python
+if from_source is not None:
+    # 1. 读源
+    src = src_path.read_text(...)
+    # 2. extract_skeleton + adapt_novel（复用已有模块）
+    skeleton = G.extract_skeleton(src, client=client)
+    adapt_text = G.adapt_novel(src, direction, genre, style,
+                                client=client, skeleton_text=skeleton)
+    # 3. init 项目；保存 adapt.md 作为参考
+    proj = S.init_project(project_dir, init_title, theme=theme,
+                          meta={"genre": genre, "target_words": words,
+                                "source": from_source, "direction": direction})
+    (proj.novel_dir / "adapt.md").write_text(
+        "# 源小说骨架\n\n" + skeleton + "\n\n---\n\n# 改编方案\n\n" + adapt_text,
+        encoding="utf-8")
+    # 4. 关键：把 adapt_text 预填到 outline.md，让 _planning_phase 跳过大纲生成
+    proj.outline_path.write_text(
+        "# 大纲（基于模仿改编）\n\n" + adapt_text + "\n", encoding="utf-8")
+    # 5. 跑 auto（--skip_plans=True 跳过 PLANNING 阶段）
+    spec = AutoSpec(title=init_title, ..., target_words=words)
+    return _run_auto_via_spec(spec, project_dir, cfg, ..., skip_plans=True)
+```
+
+### 9.5 webnovel-pack --auto 改造
+
+**位置**：`novel_cli.py:842`（`@app.command(name="webnovel-pack")`）
+
+新加 `--auto` / `--quality` / `--budget` flag。不加 `--auto` 时行为不变（向后兼容）；加 `--auto` 时：
+
+1. 先建项目骨架（与 v0.11 完全一致）
+2. 预填 `outline.md` 为 webnovel 黄金三章骨架内容
+3. 调 `run_auto_novel(spec, target, cfg=cfg)` 走 6 阶段流水线
+
+### 9.6 测试覆盖
+
+`tests/test_write.py` 新增（**8 个用例**）：
+
+| 测试类 | 用例 |
+|---|---|
+| `TestWriteDemand` | 必须给输入；--title + --from-source 不互斥；需求驱动端到端 DRY_RUN |
+| `TestWriteAdapt` | 源不存在报错；模仿驱动端到端；--title 覆盖 auto-derived 标题 |
+| `TestWriteMisc` | --help 显示 4 个 flag；--template 填充默认；--template 未知报错 |
+
+`tests/test_templates.py` 16 个用例（之前已加）。
+
+`tests/test_plan_all.py` 删除（8 个失效）。
+
+全套 **217 用例**，本地 `tests/smoke_test.sh` 跑通。
 
 ---
 

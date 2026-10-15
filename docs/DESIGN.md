@@ -1,6 +1,9 @@
 # 设计文档（Design）
 
-novel-writer v0.11 的架构设计说明，含架构图、数据流图、关键决策。
+novel-writer v0.12 的架构设计说明，含架构图、数据流图、关键决策。
+
+> **v0.12 定位修订**：从「AI 辅助创作工具」转向「**给定输入自动写完整本书**」。  
+> 两种工作流（需求驱动 / 模仿驱动）收敛为统一 `novel write` 顶层入口；删除了 5 个被 auto 流水线完全替代的命令。详见 [§13. v0.12 输入驱动架构](#13-v012-输入驱动架构)。
 
 ---
 
@@ -597,4 +600,179 @@ flowchart TB
 - [BEST_PRACTICES.md](BEST_PRACTICES.md) - 最佳实践
 - [PROGRESS.md](../PROGRESS.md) - 演进日志
 - [CHANGELOG.md](../CHANGELOG.md) - 版本日志
+
+---
+
+## 13. v0.12 输入驱动架构
+
+### 13.1 定位变化
+
+| | v0.11（之前） | v0.12（现在） |
+|---|---|---|
+| 项目定位 | AI 辅助创作工具 | 给定输入自动写完整本书 |
+| 主入口 | `novel auto`（需求）/ `novel init + chapter N`（手动） | `novel write`（需求 + 模仿 + 网文 三个语义合一） |
+| 手动介入 | 单章写、续写、改写频繁 | 仅在 auto 流水线结果上做局部微调 |
+| 命令数 | 50 | 45（删 6 加 1） |
+
+v0.11 把「规划 / 写作 / 润色 / 一致性 / 导出」拆成大量子命令留给用户逐步调用；
+v0.12 把这些步骤收敛为 `run_auto_novel()` 的 6 阶段流水线，对外只暴露两个语义入口。
+
+### 13.2 novel write 双分支数据流
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                       novel write                          │
+│  (typer command, novel_cli.py:236)                         │
+└────────────────────────┬───────────────────────────────────┘
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+     --title 走需求驱动      --from-source 走模仿驱动
+              │                     │
+              ▼                     ▼
+    init_project()         extract_skeleton(source)
+    填 title/theme/genre   ─→ adapt_novel(source, direction,
+    /style/words → spec              target_genre, target_style)
+              │                     │
+              │                     ├─→ 保存 .novel/adapt.md
+              │                     ├─→ 预填 .novel/outline.md
+              │                     └─→ init_project() + spec
+              │                     │
+              └──────────┬──────────┘
+                         │
+                         ▼
+              run_auto_novel(spec, project_dir)
+              ┌──────────────────────────────────────┐
+              │ 阶段 1: PLANNING                    │
+              │   outline / characters / world /     │
+              │   volumes / chapter_plans            │
+              │ 阶段 2: WRITING                     │
+              │   _write_one_chapter ×N              │
+              │ 阶段 3: POLISHING                   │
+              │   batch polish + detect              │
+              │ 阶段 4: CONSISTENCY                 │
+              │   timeline / state / arcs            │
+              │ 阶段 5: EXPORTING                   │
+              │   book.md                           │
+              └──────────────────────────────────────┘
+```
+
+### 13.3 模仿驱动的桥接
+
+**问题**：`run_auto_novel()` 默认是「从零生成」的 6 阶段流水线。模仿驱动有现成的
+「改编方案」文本，能否在 auto 里被消费？
+
+**方案**：让 `_planning_phase()` 的产物文件存在性 + 大小检查（≥200 字节）天然跳过：
+
+```python
+# novel/auto.py:106
+if not project.outline_path.exists() or project.outline_path.stat().st_size < 200:
+    # regenerate
+    ...
+project.outline_path.write_text("# 大纲\n\n" + res.content + "\n", encoding="utf-8")
+```
+
+模仿驱动先调用 `extract_skeleton` + `adapt_novel` 拿到改编方案，再把
+adapt_text 作为 `outline.md`（>200 字节）写出：
+
+```python
+# novel_cli.py:354-356
+(proj.novel_dir / "adapt.md").write_text(...)
+proj.outline_path.write_text("# 大纲（基于模仿改编）\n\n" + adapt_text + "\n", ...)
+```
+
+`_planning_phase` 看到 outline.md 已存在 → 跳过大纲生成，**进入下一步**：
+
+- characters.md：auto 自动基于 outline 生成（有具体人物名）
+- world.md：auto 自动基于 outline 生成（如果是网文/玄幻等非现实题材）
+- chapter_plans/*.md：auto 自动基于 outline + characters + world 逐章生成
+
+**结果**：改编方案的「核心冲突 / 人物骨架 / 主题」沿用，但具体人物名 / 章纲由 auto
+重新规划以匹配目标题材。这一设计避免了在 auto 的 prompt 里塞入 adapt 内容的耦合。
+
+### 13.4 spec_from_project helper
+
+**问题**：`run_auto_novel(spec, project_dir)` 要求传入完整 `AutoSpec`；
+但用户已经手动 `init` 过一个项目（写好 .novel/project.yaml），再跑 auto 时
+期望「复用项目元数据」。
+
+**方案**：
+
+```python
+# novel/auto.py:534-560
+def spec_from_project(project_dir: Path, quality: QualityPreset = ...) -> _AutoSpec:
+    proj = S.load_project(project_dir)
+    meta = proj.meta or {}
+    return _AutoSpec(
+        title=proj.title,
+        theme=meta.get("theme", ""),
+        genre=meta.get("genre", "现实 / 严肃文学"),
+        style=meta.get("style_preset", ""),
+        target_words=int(meta.get("target_words") or 100000),
+        target_chapters=0,  # 由 __post_init__ 自动算
+        quality=quality,
+    )
+```
+
+现在用户可以「`novel init --template 东北悬疑` → `novel write . --quality premium`」
+两步走，前者只填元数据，后者只跑流水线。
+
+### 13.5 删除的命令：定位 vs 实现
+
+| 命令 | 定位 | 实现 | v0.12 后定位 |
+|---|---|---|---|
+| `plan` | 单章细化 | `G.generate_chapter_plan(proj, n)` | 由 `_planning_phase` 批量化（auto 阶段 1） |
+| `plan-all` | 批量细化 | 循环 `generate_chapter_plan` | 由 `--plans-only` + `_planning_phase` 取代 |
+| `plans` | 章纲列表 | `proj.novel_dir / "chapter_plans"` glob | 由 `status` / `audit` 取代 |
+| `sprint` | 从末章冲 N 章 | 调用 `write(start, end)` | 由 `auto` 续跑（auto_state 跳过已完成）取代 |
+| `batch` | 批量 polish/detect | 4 个 if-else 分支调用 LLM | 由 `auto` 的 POLISHING + CONSISTENCY 阶段取代 |
+| `write -s --end` | 手动连续写 | 循环 `write_chapter_extended` | **顶级化**为 `novel write`（统一入口） |
+
+**保留为高级手动**（局部微调，不违反「输入 → 自动」定位）：
+- `chapter N`：覆盖单章
+- `continue N`：接写单章
+- `chat N`：自然语言协作
+- `expand-scene N`：场景插入
+- `polish N` / `detect N` / `radar N`：单章检测（统计与报告）
+
+### 13.6 隐藏 bug 的修复
+
+**问题**：`novel_cli.py:1968` 调用 `run_auto_novel(... resume=effective_resume ...)`，
+但 `run_auto_novel` 的真实签名是 `state=`，不是 `resume=`。当前没人触发是因为
+位置参数旁路；但 `auto --resume` 显式续跑 + 控制信号路径会 TypeError。
+
+**修复**：
+
+```python
+# 之前（潜在 TypeError）
+out = run_auto_novel(
+    spec, proj.root, cfg=cfg,
+    resume=effective_resume,    # ← 错（同名状态对象，不是 bool）
+    ...
+)
+
+# 现在
+out = run_auto_novel(
+    spec, proj.root, cfg=cfg,
+    budget_cny=budget,
+    plans_only=plans_only,
+    skip_plans=skip_plans,
+)
+# 让 run_auto_novel 内部 if state is None: state = AutoState.load(...) 自动加载
+```
+
+### 13.7 与 v0.13+ 的衔接点
+
+`novel write` 提供的统一入口对未来的特性友好：
+
+- **多语言**：`--lang en` 让 spec 加 language 字段，传给 `_build_chapter_ctx` 的 prompts
+- **不同 POV**：`--pov first-person` 让 spec 加 pov 字段，写入每章 prompt
+- **不同输出格式**：`--format epub/pdf`：复用 `_exporting_phase` 的 last 步骤
+
+这些都不需要 `novel write` 重构，只需要在 `AutoSpec` 加字段 + 6 阶段的对应步骤
+读取即可。内核的「简化设计 = 可扩展」的体现。
+
+---
+
+## 附录 A：相关文档
 - [CONTRIBUTING.md](../CONTRIBUTING.md) - 贡献指南

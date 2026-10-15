@@ -1,6 +1,8 @@
 # novel-writer · 用户手册
 
-> v0.11 · 完整使用指南
+> **v0.12** · 完整使用指南  
+> **项目定位**：给定输入（题目 + 风格 + 字数 / TXT 源小说）→ 自动写完整本书。  
+> **推荐入口**：`novel write`（统一覆盖需求驱动与模仿驱动两种工作流）。
 
 ## 目录
 
@@ -58,7 +60,7 @@ novel chat 3 "把结尾放慢一些"      # 自然语言协作修改
 > 或 `novel auto` 走 6 阶段流水线。`novel write` 是新的统一入口。
 
 # 6. 看进度
-# 浏览器：http://127.0.0.1:8765 （novel auto --serve 启动后）
+# 浏览器：http://127.0.0.1:8765 （novel write --serve 或 novel auto --serve 启动后）
 # 或终端：novel status --watch --auto
 ```
 
@@ -224,7 +226,7 @@ nano .novel/chapter_plans/0005.md  # 手工调
 # 重生成某章：删除文件后重跑 plans-only
 
 # 阶段 C：自动写正文（8-15 小时）
-novel auto . -t "凡人仙途" --theme "..." \
+novel write . -t "凡人仙途" --theme "..." \
   --genre 修仙 --style 经典爽文 \
   --words 1000000 --quality premium --budget 120 \
   --skip-plans --serve --serve-port 8765
@@ -312,7 +314,8 @@ novel status --watch --interval 5  # 自定义刷新间隔
 **`novel serve`**：浏览器版仪表盘
 ```bash
 cd my_novel && novel serve         # 默认 http://127.0.0.1:8765
-novel auto ... --serve --serve-port 9000  # auto 跑时同步启动
+novel write ... --serve --serve-port 9000  # write 跑时同步启动
+novel auto ... --serve --serve-port 9000   # 等价（同底层）
 ```
 
 ### 4.2 规划（6 个）
@@ -385,15 +388,90 @@ novel auto ... --serve --serve-port 9000  # auto 跑时同步启动
 | `novel webnovel-genres` | 网文 8 个题材 |
 | `novel webnovel-styles` | 9 个爽感文风 |
 
-### 4.8 提示词管理
+### 4.8 端到端写作（推荐入口 — v0.12 起）
+
+#### `novel write <NAME>`（最常用）
+
+两种工作流合一，**一行写完整本书**。
+
+**参数**：
+
+```bash
+novel write [NAME] [OPTIONS]
+
+模板快速开始：
+  -T, --template NAME    套用推荐模板填充题材/文风/字数（`novel templates` 看列表）
+
+需求驱动（与 --from-source 互不冲突，可同时给 --title 覆盖）：
+  -t, --title TEXT       小说标题
+  --theme TEXT           一句话主题
+  -S, --from-source PATH 模仿驱动：源小说 TXT/MD 文件路径
+  -d, --direction TEXT   模仿方向：换名/换壳/后传/反派视角/性别转换
+
+共享：
+  -g, --genre TEXT       题材（默认 "现实 / 严肃文学"）
+  -s, --style TEXT       文风
+  -w, --words INTEGER    目标总字数（默认 50000）
+  --chapters INTEGER     显式章节数（0=按字数自动）
+  --quality [draft|standard|premium]   质量档（默认 standard）
+  --budget FLOAT         成本上限 CNY（0=不限）
+
+控制：
+  --serve                启动后台 Web 仪表盘
+  --serve-port INTEGER   仪表盘端口（默认 8765）
+  --plans-only           只跑规划阶段，不进入写作
+  --skip-plans           跳过规划阶段，直接进入写作
+  --here                 就地初始化（跳过 NAME）
+  --force                目标目录非空时仍执行
+```
+
+**示例**：
+
+```bash
+# 入口 A：需求驱动
+novel write my_novel \
+  --title "冬夜的灰" --theme "1995 东北命案" \
+  --genre 悬疑 --style 冷峻 --words 60000 --quality premium
+
+# 入口 B：模仿驱动（基于源小说自动提骨架 + 改编）
+novel write fanfic --from-source 白夜行.txt \
+  --direction 换壳 --genre 校园 --style 冷峻 --words 80000 \
+  --title "夜行"
+
+# 入口 C：模板快速开始（用 东北悬疑 模板填充，用户字段覆盖）
+novel write quick --template 东北悬疑 --title '盘锦往事' --words 80000
+```
+
+**6 阶段流水线**：`novel write` 内部调用 `run_auto_novel()` 跑完：
+1. PLANNING（大纲 / 人物 / 世界观 / 分卷 / 章纲）
+2. WRITING（逐章生成 + 质量门控 + 重试）
+3. POLISHING（自动润色未达标章节）
+4. CONSISTENCY（人物名 / 时间 / 地点 / 设定漂移检测）
+5. EXPORTING（合并为 `book.md`）
+6. DONE（`state.phase = DONE`，`book.md` 存在）
+
+#### `novel webnovel-pack <NAME> --auto`
+
+网文专项（黄金三章骨架 + 爽感节奏）。`--auto` 一行写完整本网文：
+
+```bash
+novel webnovel-pack my_x --title "凡人仙途" --theme "凡人逆袭" \
+  --idea "残破玉佩" --auto --words 500000 --quality premium
+```
+
+不加 `--auto` 只建项目骨架，行为与 v0.11 一致（向后兼容）。
+
+### 4.9 提示词管理
 
 | 命令 | 用途 |
-|---|---|
+|---|---
 | `novel prompt <name> --show` | 查看项目级提示词覆盖 |
 | `novel prompt <name> --edit` | 用 `$EDITOR` 编辑 |
 | `novel prompt <name> --reset` | 恢复默认（删项目副本）|
 
-### 4.9 novel auto（最常用）
+### 4.10 novel auto（底层入口，推荐用 novel write 替代）
+
+**v0.12 起**：推荐用 §4.8 `novel write`，但 `novel auto` 仍然保留作为底层入口，行为与 v0.11 完全兼容。
 
 ```bash
 novel auto [NAME] [OPTIONS]
@@ -520,14 +598,26 @@ novel list --path ~/novels
 cd $(novel info ~/novels/灵瓶 | grep 路径)
 ```
 
-### 5.5 改编工作流
+### 5.5 改编工作流（v0.12 推荐）
+
+**端到端（一行）**：
+
+```bash
+novel write fanfic --from-source 白夜行.txt \
+  --direction 换壳 --genre 校园 --style 冷峻 --words 80000 \
+  --title "夜行"
+```
+
+走完流程：`extract_skeleton` → `adapt_novel` → 预填 `.novel/outline.md` → 6 阶段流水线 → `book.md`。
+
+**逐步手动**（仅在你想看每步输出时）：
 
 ```bash
 # 1. 提取骨架（dry-run 看效果）
 novel adapt -i source.txt --direction 换名 --genre 校园 --style 冷峻 \
   --title 新名 --no-save --print > skeleton.md
 
-# 2. 完整改编
+# 2. 完整改编（保存到 .novel/adapt.md）
 novel adapt -i source.txt --direction 换名 --genre 校园 --style 冷峻 \
   --title 新名
 
@@ -537,6 +627,8 @@ novel outline
 # 4. 开始写
 novel chapter 1
 ```
+
+> 旧式 `novel adapt` 仅生成改编方案文档（不进入写作）。要端到端就用 `novel write --from-source`。
 
 ---
 
@@ -616,14 +708,14 @@ REQUEST_TIMEOUT=300 novel chapter N   # 延长超时
 TARGET_CHAPTER_WORDS=2000 novel chapter N  # 减小单章
 ```
 
-### 6.7 novel auto 中途崩了
+### 6.7 novel write / auto 中途崩了
 
 ```bash
-# 续跑：自动检测进度
+# 续跑：自动检测进度（state=None 会让 run_auto_novel 从 .novel/auto_state.json 加载）
 cd my_novel
-novel auto . -t "..." --theme "..."  # 自动从中断处继续
-# 或显式：
-novel auto . -t "..." --theme "..." --resume
+novel write . -t "..." --theme "..."  # 自动从中断处继续
+# 或：
+novel auto . -t "..." --theme "..."   # 等价（底层都调 run_auto_novel）
 ```
 
 ### 6.8 仪表盘 / watch 看不到最新数据
