@@ -208,17 +208,46 @@ auto-retry：章节空内容自动重试 2 次（解决 5 截断问题）
 - 白夜行 -> 校园/冷峻《夜行》：35 章 4 卷完整改编，22 年时间跨度
   中国学段切分（2003-2025）+ 时代背景锚点（非典/奥运/移动互联网/疫情/大模型）
 - 白夜行 -> 桐原亮司后传 30 秒灵魂视角：214 行世界级文学水准
-之前：genre 是字符串、style 是自由文本，prompt 完全不用。
-现在：
-- prompts/genre_presets.md：10 个题材（玄幻/仙侠/科幻/悬疑/言情/历史/武侠/都市/校园/现实）
-  每个含硬规则、常见设定、容易翻车、作家参考
-- prompts/style_presets.md：11 个文风（搞笑/轻松/伤感/诗意/冷峻/热烈/朴素/华丽/紧张/黑色幽默/儿童）
-  每个含语言特征、写作时注意、作家参考
-- novel/prompts.py：list_genres/list_styles + 智能匹配（精确 -> 包含 -> 前缀）
-- novel_cli.py init：完整 --genre/--style 选项
-- 自动注入：build_chapter_messages / build_outline_messages 把 genre 硬规则加入 system prompt
-- 自动存档：.novel/genre_preset.md 保存选中的题材硬规则
-- novel genres / novel styles 命令：查询所有支持预设
+
+## 5.13 v0.11.x 项目模板系统（commit pending）
+在 v0.10 题材/文风原子预设之上，预置 10 个常用组合（一键套用）：
+
+### 5.13.1 设计动机
+v0.10 让用户选择题材 + 文风 + 字数，但作者面对空白 init 选项仍然要在 10×11 矩阵里挑组合。
+本特性把高频组合收敛为 `模板名`，写作时不再需要从零组合。
+
+### 5.13.2 模板结构（novel/templates.py）
+- 新增 `Template` dataclass：name / description / genre / style / default_words
+  / sample_title / sample_theme / sample_characters / sample_idea / tags
+- 10 个预设：
+  1. 东北悬疑（悬疑+冷峻，80K）→ 双雪涛/班宇
+  2. 硬科幻（科幻+朴素，60K）→ 刘慈欣/阿西莫夫
+  3. 古典言情（言情+诗意，50K）→ 张爱玲/王安忆
+  4. 武侠经典（武侠+朴素，120K）→ 金庸/古龙
+  5. 轻松校园（校园+轻松，30K）→ 日系轻小说
+  6. 诗意现实（现实+诗意，40K）→ 汪曾祺/沈从文
+  7. 黑色幽默（都市+黑色幽默，50K）→ 余华/王小波
+  8. 网文经典（修仙+经典爽文，2M）→ 长篇网文
+  9. 虐心言情（言情+伤感，40K）→ 重逢/遗憾感
+  10. 紧张悬疑（悬疑+紧张，60K）→ 暴风雪山庄
+
+### 5.13.3 匹配策略（get_template）
+四级 fallback：精确 name → 包含关系 → tag 命中 → description 包含。
+例：`东北悬疑` / `东北` / `双雪涛` / `金庸` 都能找到目标。
+
+### 5.13.4 init --template 集成
+- `novel init demo --template 东北悬疑` 一行创建完整项目
+- 用户参数优先：`--title '盘锦往事' --words 100000` 会覆盖模板默认值
+- 未指定参数回退模板值（genre/style/words 任何子集可挑）
+- 实现要点：`apply_template()` 过滤掉 None override，只在缺失时回退模板默认
+  （之前 bug：dict.get(key, default) 在 key 存在但值为 None 时仍返回 None）
+
+### 5.13.5 测试
+- tests/test_templates.py：16 个用例
+  - 模板 CRUD：list / get(精确/部分/tag/描述/未知/空)
+  - apply_template：默认值 / overrides / None 兜底
+  - 模板完整性：name/genre/style/default_words/description 非空校验
+  - CLI 集成：init --help 含 --template、unknown 模板报错、部分匹配、words 覆盖
 
 # 6. 已知问题与限制
 

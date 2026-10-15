@@ -118,7 +118,7 @@ novel status
 |------|------|
 | `novel setup` | 首次配置向导，交互式生成 `.env`（`--no-input` 非交互；`--force` 覆盖） |
 | `novel config` | 查看或修改全局配置（API key / base_url / model / DRY_RUN） |
-| `novel init <name>` | 初始化新项目（`--title --theme --genre --style --words`） |
+| `novel init <name>` | 初始化新项目（`--title --theme --genre --style --words --template`） |
 | `novel status` | 查看当前项目状态（路径 / 字数 / 元数据 / 章节列表） |
 | `novel version` | 显示版本号与运行环境（`--short` 只输出版本号；亦可 `--version` / `-V`） |
 | `novel doctor` | 自动诊断项目（`--fix` 自动修复；`--json` 机器可读） |
@@ -193,6 +193,7 @@ novel status
 |------|------|
 | `novel genres` | 列出严肃向 10 个题材 |
 | `novel styles` | 列出 11 个文风 |
+| `novel templates` | 列出 10 个推荐模板（题材+文风+字数一键组合，`novel init --template` 调用） |
 | `novel webnovel-genres` | 列出网文专项 8 个题材 |
 | `novel webnovel-styles` | 列出网文爽感 9 个文风 |
 | `novel prompt <name>` | 查看 / 编辑 / 恢复项目级提示词（`--show --edit --reset`） |
@@ -274,6 +275,11 @@ novel doctor --fix   # 一键体检 + 自动修复占位文件
 ```bash
 # 严肃文学
 novel init my_book --genre 悬疑 --style 冷峻
+
+# 推荐模板（一键套用预设题材 + 文风 + 字数）
+novel templates                          # 看 10 个模板列表
+novel init demo --template 东北悬疑 --title '盘锦往事'  # 默认 80K 冷峻
+novel init demo --template 网文经典 --words 1000000     # 部分覆盖模板字数
 
 # 网文项目（推荐）
 novel webnovel-pack cultivation_novel \

@@ -174,8 +174,35 @@ def init(
     words: int = typer.Option(30000, "--words", "-w"),
     genre: str = typer.Option("现实 / 严肃文学", "--genre", "-g", help="题材：玄幻/仙侠/科幻/悬疑/推理/言情/历史/武侠/都市/校园/现实/严肃文学"),
     here: bool = typer.Option(False, "--here"),
+    template: str = typer.Option(None, "--template", "-T", help="用推荐模板（用 `novel templates` 看列表）"),
 ):
-    """初始化一个新的小说项目。"""
+    """初始化一个新的小说项目。
+
+    --template NAME 用预设模板填充（题材 + 文风 + 主题 + 字数）。
+    例：novel init demo --template 东北悬疑
+    """
+    # 模板优先：用模板的值填充未指定字段
+    if template:
+        from novel.templates import get_template, apply_template
+        tpl = get_template(template)
+        if tpl is None:
+            console.print(f"[red]未知模板：{template}[/red]")
+            console.print("[dim]用 `novel templates` 看列表[/dim]")
+            raise typer.Exit(1)
+        values = apply_template(tpl, overrides={
+            "title": title,
+            "theme": theme,
+            "genre": genre if genre != "现实 / 严肃文学" else None,
+            "style": style or None,
+            "words": words if words != 30000 else None,
+        })
+        title = values["title"] or title
+        theme = values["theme"] or theme
+        genre = values["genre"] or genre
+        style = values["style"] or style
+        words = values["words"] or words
+        console.print(f"[cyan]使用模板：{tpl.name}[/cyan]  ({tpl.genre}, {tpl.style}, {tpl.default_words // 1000}K 字)")
+
     from novel.prompts import get_genre_block, get_style_block
     if genre in ("现实", "严肃文学"):
         genre = "现实 / 严肃文学"
@@ -2010,31 +2037,23 @@ def templates():
     """列出推荐的题材 + 文风组合，一键 init 用。
 
     比 webnovel-pack 更灵活，适合严肃向项目快速起步。
+    用 --template 参数直接套用模板：novel init demo --template 东北悬疑
     """
-    templates = [
-        {"name": "东北悬疑", "genre": "悬疑", "style": "冷峻", "words": 80000, "desc": "致敬双雪涛 / 班宇的北方叙事"},
-        {"name": "硬科幻", "genre": "科幻", "style": "朴素", "words": 60000, "desc": "贴近刘慈欣 / 阿西莫夫的扎实感"},
-        {"name": "古典言情", "genre": "言情", "style": "诗意", "words": 50000, "desc": "致敬张爱玲 / 王安忆的细腻"},
-        {"name": "武侠经典", "genre": "武侠", "style": "朴素", "words": 120000, "desc": "致敬金庸 / 古龙的江湖气"},
-        {"name": "轻松校园", "genre": "校园", "style": "轻松", "words": 30000, "desc": "日系轻小说 / 国产青春剧"},
-        {"name": "诗意现实", "genre": "现实", "style": "诗意", "words": 40000, "desc": "致敬汪曾祺 / 沈从文的淡墨"},
-        {"name": "黑色幽默", "genre": "都市", "style": "黑色幽默", "words": 50000, "desc": "致敬余华 / 王小波的戏谑"},
-        {"name": "网文经典", "genre": "修仙", "style": "经典爽文", "words": 2000000, "desc": "百万字长篇网文"},
-        {"name": "虐心言情", "genre": "言情", "style": "伤感", "words": 40000, "desc": "情感细腻、有遗憾感"},
-        {"name": "紧张悬疑", "genre": "悬疑", "style": "紧张", "words": 60000, "desc": "节奏快、悬念密"},
-    ]
-    table = Table(title="推荐题材 + 文风组合")
+    from novel.templates import list_templates
+    tpls = list_templates()
+    table = Table(title="推荐模板（10 个）")
     table.add_column("模板名")
     table.add_column("题材")
     table.add_column("文风")
     table.add_column("字数")
     table.add_column("风格描述")
-    for t in templates:
-        table.add_row(t["name"], t["genre"], t["style"], f"{t['words'] // 1000}K", t["desc"])
+    for t in tpls:
+        table.add_row(t.name, t.genre, t.style, f"{t.default_words // 1000}K", t.description)
     console.print(table)
     console.print("\n[dim]用法示例：[/dim]")
+    console.print("  novel init my_novel --template 东北悬疑 --title '盘锦往事'")
+    console.print("  novel init my_novel --template 网文经典 --words 1000000")
     console.print("  novel init my_novel --title '冬夜的灰' --genre 悬疑 --style 冷峻 --words 80000")
-    console.print("  novel webnovel-pack xianxia --title '凡人修仙' --theme '凡人逆袭' --idea '残破玉佩'")
 
 
 if __name__ == "__main__":

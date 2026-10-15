@@ -62,6 +62,20 @@ novel-writer 的版本变更记录。遵循 [Keep a Changelog](https://keepachan
 
 ---
 
+## [0.11.x] - 项目模板系统
+
+### 新增
+- `novel/templates.py`：10 个推荐模板（东北悬疑 / 硬科幻 / 古典言情 / 武侠经典 / 轻松校园 / 诗意现实 / 黑色幽默 / 网文经典 / 虐心言情 / 紧张悬疑）
+- `novel templates` 命令：列出 10 个预设组合（题材 + 文风 + 字数 + 风格描述）
+- `novel init <name> --template NAME`：一键套用模板（用户参数仍可覆盖）
+  - 模糊匹配：精确 → 包含 → tag → 描述（`东北悬疑`/`东北`/`双雪涛` 都命中）
+- 16 个单元测试 + CLI 集成测试
+
+### 修复
+- `apply_template()` 在 override 为 None 时错误返回 None（dict.get 模式 bug）：改为过滤 None 后再回退默认值
+
+---
+
 ## [0.9.0] - 输出与追踪
 
 ### 新增
