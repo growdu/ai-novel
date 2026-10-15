@@ -247,7 +247,9 @@ novel characters      # 2. 人物志
 novel world           # 3. 世界观（地理 / 历史 / 硬规则）
 novel volumes         # 4. 长篇分卷（每卷核心冲突、节奏、卷末状态）
 novel chapter 5 6 7   # 5. 逐章写（每章自动维护元数据）
-novel write -s 10 -e 15  # 6. 连续写
+
+# 推荐 v0.12：用 novel write 一行写完整本
+# novel write demo --title "..." --genre 修仙 --style 经典爽文 --words 50000
 ```
 
 每章写完会自动维护 `state.md` / `foreshadowing.md` / `arcs/_overview.md` / `titles.json` / `timeline.md` / `volumes.md`。

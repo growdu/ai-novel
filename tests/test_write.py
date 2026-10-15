@@ -143,3 +143,33 @@ class TestWriteHelp:
         assert "--title" in result.stdout
         assert "--from-source" in result.stdout
         assert "--direction" in result.stdout
+        assert "--template" in result.stdout
+
+    def test_write_with_template_fills_defaults(self, tmp_path, monkeypatch, dry_run_env):
+        """--template 应用预设；用户 --title 仍覆盖模板默认。"""
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "write", "templated",
+            "--template", "东北悬疑",
+            "--title", "我自定义的标题",
+            "--chapters", "2",
+            "--quality", "draft",
+        ])
+        assert result.exit_code == 0, result.stdout
+        import yaml
+        data = yaml.safe_load((tmp_path / "templated" / ".novel" / "project.yaml").read_text(encoding="utf-8"))
+        # 用户标题覆盖模板默认
+        assert data["title"] == "我自定义的标题"
+        # 模板的题材/字数生效
+        assert data["genre"] == "悬疑"
+        assert data["target_words"] == 80000  # 模板默认
+
+    def test_write_with_unknown_template_fails(self, tmp_path, monkeypatch, dry_run_env):
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [
+            "write", "demo",
+            "--template", "完全不存在的xyz",
+            "--title", "x",
+        ])
+        assert result.exit_code != 0
+        assert "未知模板" in result.stdout

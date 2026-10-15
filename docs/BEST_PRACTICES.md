@@ -514,8 +514,8 @@ novel chapter 1 --extra "开篇困境：主角被退婚当众羞辱"
 novel chapter 2 --extra "觉醒：金手指出现，鉴定为上古残宝"
 novel chapter 3 --extra "打脸：退婚当日让对方丢尽颜面"
 
-# 后续
-novel sprint --count 20  # 自动写 4-23 章
+# 后续（v0.12 推荐用 novel write 一行写完）
+novel write demo --title "..." --genre 修仙 --style 经典爽文 --words 50000
 ```
 
 ### 场景 4：改编高热度小说

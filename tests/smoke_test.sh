@@ -40,7 +40,6 @@ rm -rf $TESTDIR
 
 echo ""
 echo "=== 冒烟测试完成 ==="
-echo "如果你想实际跑一遍："
+echo "如果你想实际跑一遍（v0.12 推荐 novel write 一行写完）："
 echo "  source .env  # 加载 minimax key"
-echo "  novel init my_novel --title '...'"
-echo "  cd my_novel && novel outline && novel characters && novel chapter 1"
+echo "  novel write my_novel --title '...' --theme '...' --genre 悬疑 --style 冷峻 --words 60000 --quality premium"

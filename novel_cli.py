@@ -235,6 +235,8 @@ def init(
 @app.command(name="write")
 def write(
     name: str = typer.Argument(None, help="项目目录名（与 --here 互斥）"),
+    # ─── 模板快速入口（与下面字段叠加：用户值覆盖模板默认）───
+    template: str = typer.Option(None, "--template", "-T", help="用推荐模板填充题材/文风/字数（`novel templates` 看列表）"),
     # ─── 需求驱动（与 --from-source 互斥；至少指定其中一个）───
     title: str = typer.Option(None, "--title", "-t", help="小说标题"),
     theme: str = typer.Option("", "--theme", help="一句话主题"),
@@ -257,6 +259,8 @@ def write(
 ):
     """一行写完整本书：需求驱动（--title）或模仿驱动（--from-source），跑完规划→写作→润色→一致性→导出。
 
+    --template 用预设快速填题材/文风/字数；用户参数（--title/--words/...）始终优先。
+
     Examples:
         # 需求驱动
         novel write demo --title '冬夜的灰' --theme '东北命案' --genre 悬疑 --style 冷峻 --words 60000
@@ -264,11 +268,34 @@ def write(
         # 模仿驱动
         novel write fanfic --from-source 白夜行.txt --direction 换壳 --genre 校园 --style 冷峻 --words 80000
 
-        # 模板快速开始（自动 init 后直接跑 auto）
+        # 模板快速开始
         novel write quick --template 东北悬疑 --title '盘锦往事' --words 80000
     """
+    # ── 0. 模板快速入口：先用模板填默认，再让用户字段覆盖 ──
+    if template:
+        from novel.templates import get_template, apply_template
+        tpl = get_template(template)
+        if tpl is None:
+            console.print(f"[red]未知模板：{template}[/red]")
+            console.print("[dim]用 `novel templates` 看列表[/dim]")
+            raise typer.Exit(1)
+        values = apply_template(tpl, overrides={
+            "title": title,
+            "theme": theme,
+            "genre": genre if genre != "现实 / 严肃文学" else None,
+            "style": style or None,
+            "words": words if words != 50000 else None,
+        })
+        title = values["title"] or title
+        theme = values["theme"] or theme
+        genre = values["genre"] or genre
+        style = values["style"] or style
+        words = values["words"] or words
+        console.print(f"[cyan]使用模板：{tpl.name}[/cyan]  ({tpl.genre}, {tpl.style}, {tpl.default_words // 1000}K 字)")
+
     # ── 1. 校验：至少指定 --title 或 --from-source 之一 ──
-    # （--title + --from-source 可同时：模仿分支里 --title 会覆盖自动派生的标题）
+    # （--title + --from-source 可同时：模仿分支里 --title 会覆盖自动派生的标题；
+    #  用 --template 时模板可能填了 title，所以这里允许 title 为 None 的更早退出已被模板覆盖）
     if title is None and from_source is None:
         console.print("[red]请指定输入：--title（需求驱动）或 --from-source（模仿驱动）[/red]")
         raise typer.Exit(1)
