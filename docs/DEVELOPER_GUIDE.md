@@ -29,23 +29,38 @@
 
 ```text
 ai-novel/
-├── novel_cli.py              # CLI 入口（47 命令注册）
+├── novel_cli.py              # CLI thin entry（仅 ~45 行：app + 全局 callback + 入口）
 ├── novel/                    # 核心库
-│   ├── __init__.py           # 导出 __version__
+│   ├── __init__.py           # 导出 __version__ = "0.13.x"
+│   ├── commands/             # v0.13.x 模块化后的命令包（50 命令）
+│   │   ├── __init__.py       # register_all(app) 聚合
+│   │   ├── _config.py        # setup / config / version / prompt
+│   │   ├── _presets.py       # genres / styles / webnovel_genres / webnovel_styles / templates
+│   │   ├── _init.py          # init / write / webnovel_pack  + _run_auto_via_spec helper
+│   │   ├── _run.py           # auto / serve
+│   │   ├── _planning.py      # outline / characters / world / volumes
+│   │   ├── _writing.py       # chapter / continue / chat / expand_scene / title
+│   │   ├── _qa.py            # polish / detect / radar
+│   │   ├── _state.py         # timeline / state / rolling / check / arc / foreshadow / volume_report / gaps
+│   │   ├── _project.py       # list / info / whereami / status / audit / progress / history
+│   │   ├── _diagnose.py      # doctor / retry-stuck / rollback / fix / diff
+│   │   ├── _adapt.py         # adapt / fanfic
+│   │   └── _output.py        # export / index
 │   ├── config.py             # GlobalConfig 配置 / .env 加载
 │   ├── llm.py                # LLMClient + think 标签剥离 + chat_with_continuation
 │   ├── storage.py            # Project 数据类 + 章节读写 + 版本备份
 │   ├── prompts.py            # 28 个提示词构建函数
 │   ├── generator.py          # 主流程：写章节、伏笔、人物、世界
 │   ├── diff_utils.py         # 章节版本对比
-│   ├── auto.py               # 一键全自动编排器
+│   ├── templates.py          # 10 推荐模板 + apply_template
+│   ├── auto.py               # 一键全自动编排器（含 v0.13 并发）
 │   ├── auto_state.py         # AutoState 状态机 + 持久化
 │   ├── quality_gates.py      # 字数 / AI 味 / 雷达 / 一致性 校验
 │   ├── budget.py             # 模型价格表 + BudgetTracker
 │   ├── token_tracker.py      # LLMClient 包装器：token 累加
 │   └── web.py                # Web 仪表盘 HTTP 服务
 ├── prompts/                  # 28 个独立 markdown 提示词
-├── tests/                    # 208 个 pytest 测试
+├── tests/                    # 228 个 pytest 测试
 ├── docs/                     # 文档（USER_MANUAL / DESIGN / BEST_PRACTICES / 本文件）
 ├── my_novel/                 # 示例项目（v0.11 7 章 50K 字）
 ├── examples/                 # 用户示例
@@ -54,6 +69,10 @@ ai-novel/
 ├── pyproject.toml            # 项目元数据 + ruff + pytest 配置
 └── README.md                 # 项目入口
 ```
+
+> **v0.13.x 模块化说明**：2038 行的 `novel_cli.py` 拆成 11 个 ~80-400 行的命令模块。
+> 加新命令不再需要翻 2000 行：直接新增 `novel/commands/_xxx.py` 并在 `__init__.py` 调用它的 `register(app)`。
+> 历史背景：v0.11 时 1 个文件 50 命令，命名冲突 + 改一处影响全文；v0.13 后改 1 个文件 ~150 行。
 
 ### 1.2 模块依赖图
 
@@ -105,12 +124,13 @@ graph TB
 
 | 模块 | 行数 | 责任 |
 |---|---|---|
-| `novel_cli.py` | ~1900 | 45 命令注册 + Typer 集成（含 `novel write` 顶层入口） |
+| `novel_cli.py` | **45** | thin entry：app + 全局 callback（--version / -V） + 入口 |
+| `novel/commands/*.py` | **2340** | 11 个命令模块（_init/_config/_presets/_run/...），50 命令按功能切分（v0.13.x 模块化） |
 | `novel/templates.py` | 200 | 10 个推荐模板 + `apply_template()`（过滤 None override） |
 | `novel/generator.py` | 660 | 写章节、伏笔、人物、世界 |
 | `novel/prompts.py` | 470 | 28 个 builder 函数 |
 | `novel/llm.py` | 250 | LLM HTTP + think 剥离 + 续写 |
-| `novel/auto.py` | 610 | 全自动编排器（含 `spec_from_project` helper） |
+| `novel/auto.py` | 610 | 全自动编排器（含 `spec_from_project` + v0.13 并发 `_writing_phase_parallel`） |
 | `novel/web.py` | 350 | HTTP 仪表盘 |
 | `novel/auto_state.py` | 220 | 状态机 dataclass |
 | `novel/storage.py` | 195 | 项目/章节文件 I/O |
@@ -119,8 +139,18 @@ graph TB
 | `novel/token_tracker.py` | 95 | LLMClient 包装 |
 | `novel/diff_utils.py` | 35 | difflib 封装 |
 | `novel/config.py` | 110 | .env 加载 + env helpers |
-| `novel/__init__.py` | 4 | 导出 `__version__ = "0.12.0"` |
-| **合计** | **~5300** | |
+| `novel/__init__.py` | 4 | 导出 `__version__ = "0.13.0"` |
+| **合计** | **~6000** | |
+
+**v0.13.x 模块化收益**：
+
+| 指标 | v0.12 | v0.13 |
+|---|---|---|
+| `novel_cli.py` 行数 | 2038 | **45**（thin entry） |
+| 命令模块数 | 1 | 11 |
+| 单文件最大行数 | 2038 | 389（`_project.py`） |
+| 添加新命令成本 | 翻 2000 行找位置 | 新建 ~150 行文件 + 一行 `register_all` |
+| 命名冲突检测 | 容易撞 | 每模块独立命名空间 |
 
 ### 1.4 提示词目录（28 个）
 

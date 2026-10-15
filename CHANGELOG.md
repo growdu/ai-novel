@@ -139,6 +139,43 @@ novel-writer 的版本变更记录。遵循 [Keep a Changelog](https://keepachan
 
 ---
 
+## [0.13.1] - novel_cli.py 模块化重构
+
+### 重构
+把 `novel_cli.py`（2038 行）拆成 11 个 `novel/commands/*.py` 模块：
+
+```
+novel/commands/
+├── __init__.py       # register_all(app) 聚合
+├── _config.py        # setup / config / version / prompt
+├── _presets.py       # genres / styles / webnovel_genres / webnovel_styles / templates
+├── _init.py          # init / write / webnovel_pack
+├── _run.py           # auto / serve
+├── _planning.py      # outline / characters / world / volumes
+├── _writing.py       # chapter / continue / chat / expand_scene / title
+├── _qa.py            # polish / detect / radar
+├── _state.py         # timeline / state / rolling / check / arc / foreshadow / volume_report / gaps
+├── _project.py       # list / info / whereami / status / audit / progress / history
+├── _diagnose.py      # doctor / retry-stuck / rollback / fix / diff
+├── _adapt.py         # adapt / fanfic
+└── _output.py        # export / index
+```
+
+### 收益
+- `novel_cli.py`: 2038 行 → **45 行**（thin entry）
+- 单文件最大行数：389（`_project.py`）
+- 加新命令成本：翻 2000 行找位置 → 新建 ~150 行文件 + 1 行 register 调用
+- 命名冲突：全局命名空间 → 每模块独立
+
+### 测试
+**228 用例零改动通过**（refactor 对外行为透明）
+
+### 文档
+- DEVELOPER_GUIDE §1.1 文件树 + §1.3 模块大小表
+- PROGRESS §5.16 模块化重构
+
+---
+
 ## [0.9.0] - 输出与追踪
 
 ### 新增

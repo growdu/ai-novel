@@ -389,3 +389,47 @@ F1 到 Fn 编号、回收时间都是模型自填的，可能漏掉或填错。
 - 让作者拖动时间线节点（自动写章节）
 - 多项目批量管理
 - 出版级别的长篇自动产出
+
+## 5.16 v0.13.x novel_cli.py 模块化重构（commit pending）
+
+### 背景
+v0.12 时 `novel_cli.py` 2038 行装 50 命令 + helpers：
+- 添加新命令要在 2000 行里找位置
+- 命令名全局冲突（如 `write` 撞过）
+- 一处改动影响整文件（hot reload 不友好）
+
+### 实现
+把 `novel_cli.py` 拆成 11 个按功能切的命令模块：
+
+| 模块 | 命令数 | 责任 |
+|---|---|---|
+| `commands/_config.py` | 4 | setup / config / version / prompt |
+| `commands/_presets.py` | 5 | genres / styles / webnovel_genres / webnovel_styles / templates |
+| `commands/_init.py` | 3 | init / write / webnovel_pack + `_run_auto_via_spec` |
+| `commands/_run.py` | 2 | auto / serve |
+| `commands/_planning.py` | 4 | outline / characters / world / volumes |
+| `commands/_writing.py` | 5 | chapter / continue / chat / expand_scene / title |
+| `commands/_qa.py` | 3 | polish / detect / radar |
+| `commands/_state.py` | 8 | timeline / state / rolling / check / arc / foreshadow / volume_report / gaps |
+| `commands/_project.py` | 7 | list / info / whereami / status / audit / progress / history + `_print_auto_status` + `_watch_status` |
+| `commands/_diagnose.py` | 5 | doctor / retry-stuck / rollback / fix / diff |
+| `commands/_adapt.py` | 2 | adapt / fanfic |
+| `commands/_output.py` | 2 | export / index |
+
+`novel_cli.py` 现在只剩 45 行：app 定义 + 全局 callback + `register_all(app)` + `if __name__`。
+
+### 设计要点
+- 每个模块自建 `console = Console()` + 自管 imports
+- 命令函数不直接 `@app.command()`，而是裸函数 + 模块底部 `register(app)`
+- `__init__.py` 的 `register_all(app)` 顺序遍历所有模块
+- 全局 callback（`--version` / `--verbose`）保留在 `novel_cli.py`（callback 必须绑定到 main app）
+- 类型层 `invoke_without_command=True` 必须保留（否则 `--version` 单独执行会失败）
+
+### 测试
+**回归通过**：`tests/` 全套 228 用例零改动通过；模块切分对外行为完全透明。
+（这是模块化的关键指标：refactor 不应改变外部行为。）
+
+### 文档
+- DEVELOPER_GUIDE §1.1 文件树：加 `novel/commands/*` 11 个模块
+- DEVELOPER_GUIDE §1.3 模块大小表：把 `novel_cli.py` 行数 2038→45；新增 11 命令模块明细
+- 模块大小对比表格：v0.12 vs v0.13
