@@ -76,6 +76,35 @@ novel-writer 的版本变更记录。遵循 [Keep a Changelog](https://keepachan
 
 ---
 
+## [0.12.0] - 输入驱动端到端定位
+
+### 项目定位修订
+从「辅助创作工具」转向「给定输入自动写完整本书」。
+
+### 新增
+- **novel write 顶层统一入口**：两种工作流走一条命令
+  - 需求驱动：`novel write demo --title X --theme Y --genre Z --style W --words N`
+  - 模仿驱动：`novel write fanfic --from-source 白夜行.txt --direction 换壳 --genre 校园 --style 冷峻 --words 80000`
+  - 内部统一走 `run_auto_novel(spec, project_dir)` 的 6 阶段流水线
+- **`novel.auto.spec_from_project(project_dir, quality)`**：从 `.novel/project.yaml` 恢复 `AutoSpec`，方便已 init 项目跑 auto
+- **`novel webnovel-pack --auto`**：网文项目加 `--auto` 直接跑 6 阶段流水线（之前只建骨架）
+
+### 修复
+- `run_auto_novel(... resume=...)` 调用错误（真实签名是 `state=`），改为传 `state=None` 让内部自动从 `.novel/auto_state.json` 加载
+
+### 移除（被 auto 流水线完全替代）
+- `plan` / `plan-all` / `plans` → `_planning_phase` 自动批量
+- `sprint` → `auto` 续跑等同
+- `write --start --end`（旧）→ 与 `novel write` 顶层入口重名，让位
+- `batch {polish,detect,radar,title}` → auto 的 POLISHING + CONSISTENCY 阶段覆盖
+- 同步删除 `tests/test_plan_all.py`（8 个失效用例）
+
+### 测试
+- 新增 `tests/test_write.py`：6 个用例（需求驱动 / 模仿驱动 / 帮助与互斥）
+- 全套 215 用例全过（删除 8 + 新增 6 + 已有 217 = 215）
+
+---
+
 ## [0.9.0] - 输出与追踪
 
 ### 新增

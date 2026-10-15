@@ -249,6 +249,74 @@ v0.10 让用户选择题材 + 文风 + 字数，但作者面对空白 init 选�
   - 模板完整性：name/genre/style/default_words/description 非空校验
   - CLI 集成：init --help 含 --template、unknown 模板报错、部分匹配、words 覆盖
 
+## 5.14 v0.12 输入驱动的端到端定位（commit pending）
+**项目定位修订**：从「辅助创作工具」转向「给定输入自动写完整本书」。
+为此把两条工作流收敛为统一的 `novel write` 顶层入口，并删除被
+auto 流水线完全替代的命令。
+
+### 5.14.1 novel write 统一入口
+新增顶层命令 `novel write`，两种工作流（互不冲突）：
+
+**需求驱动**（--title）：
+```bash
+novel write demo --title '冬夜的灰' --theme '东北命案' \\
+  --genre 悬疑 --style 冷峻 --words 60000
+```
+
+**模仿驱动**（--from-source）：
+```bash
+novel write fanfic --from-source 白夜行.txt \\
+  --direction 换壳 --genre 校园 --style 冷峻 --words 80000 \\
+  --title '冬夜的灰'
+```
+
+两种分支都最终调用 `run_auto_novel(spec, project_dir)` 走完整 6 阶段流水线
+（PLANNING→WRITING→POLISHING→CONSISTENCY→EXPORTING→DONE）。
+模仿分支先做 `extract_skeleton` + `adapt_novel`，把改编结果预填到
+`.novel/outline.md`，让 auto 的 PLANNING 阶段跳过大纲生成；
+章节规划 + 写作都基于改编内容继续。
+
+### 5.14.2 spec_from_project helper
+新增 `novel.auto.spec_from_project(project_dir, quality)`，
+从 `.novel/project.yaml` 恢复 `AutoSpec`（title/theme/genre/style/target_words）。
+作用：当用户已 init 过项目（手动或带 --template），再用 `novel auto` 时
+无需再次输入所有字段。
+
+### 5.14.3 webnovel-pack --auto
+网文专项项目（黄金三章骨架等）支持 `--auto` 一行写完整本：
+```bash
+novel webnovel-pack my_book --title '凡人仙途' --theme '凡人逆袭' \\
+  --idea '残破玉佩' --auto --words 500000 --quality premium
+```
+预填 `webnovel_plan.md` 到 outline.md，自动继承网文节奏。
+
+### 5.14.4 删除被 auto 完全替代的命令
+| 命令 | 行号 | 替代物 |
+|---|---|---|
+| `plan N` | novel_cli.py:677 | `_planning_phase` 自动批量生成（auto 阶段 1） |
+| `plan-all` | novel_cli.py:686 | 同上 + `auto --plans-only` |
+| `plans [N]` | novel_cli.py:757 | `status` / `audit` 已含章纲列表 |
+| `sprint` | novel_cli.py:494 | `auto` 续跑（auto_state 跳过已完成） |
+| `batch {polish,detect,radar,title}` | novel_cli.py:1502 | auto 的 POLISHING + CONSISTENCY 阶段 |
+| `write --start --end` | novel_cli.py:527 | 与 `auto` + `--chapters` 重叠；让位给 `novel write` 顶层 |
+
+每个被删命令都有对应的 manual 命令保留：`chapter N`（单章）、`polish N`（单章）、
+`detect N`（单章）、`radar N`（单章）、`chat N`（交互协作）、`expand-scene N`（场景插入）、
+`rollback N`/`diff N`（调试）、`retry-stuck`/`fix N`（修复）。这些保留主名不做
+nested 子命令，但 README 把它们标在「高级手动」分类下。
+
+删除 `tests/test_plan_all.py`（8 个失效用例）。
+
+### 5.14.5 顺手修复的 bug
+`novel_cli.py` 调用 `run_auto_novel(... resume=effective_resume ...)`，
+但 `run_auto_novel` 的真实签名是 `state=`，不是 `resume=`。
+当前没人触发（位置参数旁路），但 `auto --resume` 在特定路径会抛 TypeError。
+改为传 `state=None`，让 `run_auto_novel` 内部从 `.novel/auto_state.json` 加载。
+
+### 5.14.6 测试
+- tests/test_write.py：6 个用例（需求驱动 + 模仿驱动 + 互斥校验 + 错误源 + 帮助）
+- 全套 215 用例全过（删除 8 + 新增 6 = 净 -2）
+
 # 6. 已知问题与限制
 
 ## 6.1 think 截断

@@ -24,22 +24,38 @@ pip install -e .
 # 2. 配置（交互式，密码隐藏输入）
 novel setup
 
-# 3. 建项目
-novel init my_novel \
+# 3. 一行写完整本书（v0.12 起推荐用 novel write）
+
+# 入口 A：需求驱动（题目 + 风格 + 字数 → 自动写完整本）
+novel write my_novel \
   --title "冬夜的灰" \
   --theme "1995 年东北小镇的命案与四个孩子" \
-  --genre 悬疑 --style 冷峻 --words 60000
+  --genre 悬疑 --style 冷峻 --words 60000 \
+  --quality premium --serve
 
-# 4. 写小说（一个一个章节写）
+# 入口 B：模仿驱动（TXT 源小说 → 提骨架 → 自动写完整本）
+novel write fanfic \
+  --from-source 白夜行.txt \
+  --direction 换壳 --genre 校园 --style 冷峻 \
+  --words 60000 --title "夜行"
+
+# 入口 C：网文专项（一键网文包 + 端到端）
+novel webnovel-pack my_xuanhuan \
+  --title "凡人仙途" --theme "凡人逆袭" \
+  --idea "残破玉佩" --auto --words 500000
+```
+
+跑完之后：
+
+```bash
 cd my_novel
-novel outline
-novel chapter 1
-novel chapter 2
-novel chapter 3
+novel status                       # 看章节进度
+novel doctor                       # 诊断（加 --fix 自动修复）
+novel chat 3 "把结尾放慢一些"      # 自然语言协作修改
+```
 
-# 5. 一键全自动（不用一个一个写）
-novel auto . --title "冬夜的灰" --theme "..." \
-  --genre 悬疑 --style 冷峻 --words 60000 --quality premium
+> **旧工作流（v0.11 及以前）**：仍是合法的 — 用 `novel init + novel chapter N` 手动逐步写，
+> 或 `novel auto` 走 6 阶段流水线。`novel write` 是新的统一入口。
 
 # 6. 看进度
 # 浏览器：http://127.0.0.1:8765 （novel auto --serve 启动后）
@@ -165,9 +181,11 @@ novel init long --title "百年孤影" --theme "东北四代人" \
 cd long
 novel outline; novel characters; novel world; novel volumes
 
-# 写
+# 写（手动单章）
 novel chapter 1
-novel write -s 5 -e 20     # 连续写
+
+# 推荐用 novel write 一行写完整本（v0.12 统一入口）
+novel write demo --title X --theme Y --genre Z --style W --words N
 
 # 自动维护：state / foreshadow / arc / timeline / title 每章都更新
 # 滚动摘要每 5 章
@@ -195,15 +213,15 @@ novel webnovel-pack xiuxian \
   --words 1000000 --idea "残破玉佩金手指"
 
 cd xiuxian
-novel outline           # 333 章粗大纲
-novel plan-all          # 批量细化所有章纲（333 个文件）
+# v0.12 推荐用法：用 novel write --plans-only 只生成章纲不写章节
+novel write . --title "凡人仙途" --theme "凡人逆袭修仙" \
+  --genre 修仙 --style 经典爽文 --words 1000000 \
+  --idea "残破玉佩金手指" --plans-only
 
-# 阶段 B：审核 / 调整（人工，可花几天）
-novel cases = novel plans | wc -l   # 看到 333 行
-novel plans                # 列表（章号 + 前几行）
-novel plans 5              # 查看第 5 章完整章纲
+# 生成完章纲后人工审核（manual 命令保留）
+ls .novel/chapter_plans | wc -l   # 应该看到大量章纲
 nano .novel/chapter_plans/0005.md  # 手工调
-novel plans 5 --refresh --extra "加快节奏"  # 让 AI 重新生成
+# 重生成某章：删除文件后重跑 plans-only
 
 # 阶段 C：自动写正文（8-15 小时）
 novel auto . -t "凡人仙途" --theme "..." \
@@ -233,8 +251,8 @@ novel chapter 1    # 困境
 novel chapter 2    # 觉醒
 novel chapter 3    # 打脸
 
-# 升级流
-novel write -s 4 -e 50
+# 升级流（v0.12 推荐用 novel write 一次写一段）
+novel write demo --title "..." --genre 修仙 --words 50000
 
 # 看半年成本
 cat .novel/auto_state.json | python3 -m json.tool | grep -E "cumulative|budget"
@@ -305,19 +323,14 @@ novel auto ... --serve --serve-port 9000  # auto 跑时同步启动
 | `novel characters` | 生成 / 扩展人物志 | `--extra` |
 | `novel world` | 世界观 | 无 |
 | `novel volumes` | 长篇分卷 | 无 |
-| `novel plan N` | 细化第 N 章大纲 | 200-400 字 |
-| `novel plan-all` | 批量生成所有章纲 | `--end --refresh --extra` |
-| `novel plans [N]` | 查看 / 刷新章纲 | `--refresh --extra` |
 
-`NEW`: 批量章纲新工作流（见教程 3）。
+> **v0.12 变更**：`plan` / `plan-all` / `plans` 已移除，被 `novel write` 的规划阶段覆盖。如需「只生成章纲不写章节」用 `novel write --plans-only`。
 
 ### 4.3 写作（10 个）
 
 | 命令 | 用途 | 关键参数 |
 |---|---|---|
 | `novel chapter N` | 写第 N 章 | `--words --iters --no-polish --extra` |
-| `novel write -s S -e E` | 连续写 | `--no-polish` |
-| `novel sprint --count N` | 从末尾写 N 章 | `--until` |
 | `novel continue N --with T` | 末尾接写 | `--words` |
 | `novel chat N '指令'` | 自然语言改 | 无 |
 | `novel expand-scene N` | 指定位置接场景 | `--after --words` |
@@ -333,7 +346,8 @@ novel auto ... --serve --serve-port 9000  # auto 跑时同步启动
 | `novel polish N` | 润色第 N 章（基于 detect+review 反馈） |
 | `novel detect N [--save]` | 检测 AI 味 |
 | `novel radar N` | 6 维度风格雷达 |
-| `novel batch <action>` | 批量 polish / detect / radar / title |
+
+> **v0.12 变更**：`batch` 已移除，被 `novel write` 的 POLISHING + CONSISTENCY 阶段自动覆盖。
 
 ### 4.5 一致性（10 个）
 
@@ -459,9 +473,10 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   novel chapter $i --no-polish
 done
 
-# 晚上 1 小时（润色）
-novel batch polish --start 1 --end 10
+# 晚上 1 小时（手动润色已写完的章节）
 novel polish 5 --extra "强化结尾余韵"
+# 上面那条不再是必需的，因为 novel write 的 POLISHING 阶段已经自动跑过了。
+# 只有在 auto 跑完后还想手润某章时才用 novel polish N。
 ```
 
 ### 5.2 长篇 1 周出 70%

@@ -74,43 +74,52 @@ novel setup
 
 ### 3. 写你的第一本书
 
+**两种入口**（推荐用 `novel write` 一行写完整本书）：
+
 ```bash
-novel init my_novel \
+# ── 入口 A：需求驱动（题目 + 风格 + 字数 → 自动写）──
+novel write my_novel \
   --title "冬夜的灰" \
   --theme "1995 年东北小镇的命案与四个孩子" \
   --genre 悬疑 \
   --style 冷峻 \
   --words 60000
 
+# ── 入口 B：模仿驱动（TXT 源小说 → 提骨架 → 自动写）──
+novel write fanfic \
+  --from-source 白夜行.txt \
+  --direction 换壳 \
+  --genre 校园 --style 冷峻 \
+  --words 60000 --title "夜行"
+
+# ── 入口 C：网文专项（一键网文包 + 自动写）──
+novel webnovel-pack my_xuanhuan \
+  --title "凡人仙途" \
+  --theme "凡人逆袭修仙" \
+  --idea "残破玉佩藏九天神诀" \
+  --auto --words 500000 --quality premium
+```
+
+跑完之后：
+
+```bash
 cd my_novel
-
-# 规划阶段
-novel outline
-novel characters
-novel world
-novel volumes
-
-# 写作阶段
-novel chapter 1
-novel write --start 2 --end 5
-novel sprint --count 10         # 自动从最后一章后写 10 章
-
-# 润色 / 检查
-novel polish 1
-novel detect 1 --save
-novel doctor                    # 诊断项目状态（可加 --fix 自动修复）
-novel status
+novel status                    # 看章节进度
+novel doctor                    # 诊断（可加 --fix 自动修复）
+novel chat 3 "把结尾放慢一些"   # 自然语言协作修改
 ```
 
 ---
 
-## 📚 命令一览（47 个）
+## 📚 命令一览（45 个）
 
-### 🚀 一键（1 个）
+### 🚀 端到端（3 个 — 推荐入口）
 
 | 命令 | 说明 |
 |---|---|
-| `novel auto -t TITLE --theme T` | 一键全自动：最小信息 → 规划→逐章→润色→一致性→导出 |
+| `novel write <name> --title X` | **需求驱动**：init + 6 阶段流水线（PLANNING→WRITING→POLISH→CONSISTENCY→EXPORT）一行到底 |
+| `novel write <name> --from-source TXT --direction X` | **模仿驱动**：提骨架 + 改编 + 预填 outline + 走 6 阶段流水线 |
+| `novel webnovel-pack <name> --auto` | **网文端到端**：建项目 + 黄金三章骨架 + 完整 6 阶段流水线 |
 
 ### 🛠 基础（5 个）
 
@@ -123,7 +132,7 @@ novel status
 | `novel version` | 显示版本号与运行环境（`--short` 只输出版本号；亦可 `--version` / `-V`） |
 | `novel doctor` | 自动诊断项目（`--fix` 自动修复；`--json` 机器可读） |
 
-### 📝 规划（5 个）
+### 📝 规划（4 个）
 
 | 命令 | 说明 |
 |------|------|
@@ -131,32 +140,35 @@ novel status
 | `novel characters` | 基于大纲生成或扩展人物志（`--extra`） |
 | `novel world` | 生成世界观（地理 / 历史 / 硬规则） |
 | `novel volumes` | 长篇分卷（5 卷结构 + 起止章节） |
-| `novel plan <N>` | 细化第 N 章大纲（200-400 字场景规划） |
 
-### ✍️ 写作（8 个）
+> 注：`plan` / `plan-all` / `plans` 已在 v0.12 移除（被 `novel write` 的规划阶段覆盖）。如需「只生成章纲不写章节」用 `novel write --plans-only`。
+
+### ✍️ 高级手动写作（4 个）
 
 | 命令 | 说明 |
 |------|------|
-| `novel chapter <N>` | 写第 N 章（写完自动维护 state/foreadow/arc/title） |
-| `novel write -s 1 -e 5` | 连续写 1-5 章 |
-| `novel sprint --count 10` | 自动从最后一章后写 10 章 |
+| `novel chapter <N>` | 写单章（写完自动维护 state/foreadow/arc/title） |
 | `novel continue <N> --with '意图'` | 在第 N 章末尾接写一段 |
 | `novel chat <N> '指令'` | 自然语言协作修改某章 |
 | `novel expand-scene <N>` | 在指定句子后接一段场景 |
-| `novel webnovel-pack <name>` | 一键建网文项目（建项目 + 选题材 + 选爽文 + 黄金三章骨架） |
-| `novel adapt` | 改编源小说（`--source --direction --genre --style --with-skeleton`） |
-| `novel fanfic` | 写后传 / 番外 / 同人（`--char --era --as-chapter`） |
 
-> **说明**：写作类共 9 个（含 adapt / fanfic / webnovel-pack 这三个 v1 工作流入口）。
+> 注：旧的 `write -s` 和 `sprint` 已在 v0.12 重命名为顶层 `novel write`（统一入口）。`batch` 已被 `novel write` 的润色阶段自动覆盖。
 
-### 🎨 润色 / 质控（4 个）
+### 🎨 改编 / 同人（3 个）
+
+| 命令 | 说明 |
+|------|------|
+| `novel adapt` | 改编源小说（仅生成改编方案；要端到端用 `novel write --from-source`） |
+| `novel fanfic` | 写后传 / 番外 / 同人（单章；`--char --era --as-chapter`） |
+| `novel webnovel-pack <name>` | 一键网文项目（不加 `--auto` 只建骨架；加 `--auto` 一行写完整本） |
+
+### 🎨 润色 / 质控（3 个）
 
 | 命令 | 说明 |
 |------|------|
 | `novel polish <N>` | 去 AI 味润色（基于 detect+review 反馈） |
 | `novel detect <N>` | 检测 AI 味（`--save` 存报告） |
 | `novel radar <N>` | 风格雷达：6 维度量化与 samples 相似度 |
-| `novel batch <action>` | 批量执行 polish / detect / radar / title（`--start --end --skip-empty`） |
 
 ### 🔍 一致性 / 长篇机制（14 个）
 

@@ -523,6 +523,41 @@ def _exporting_phase(
 # 主入口
 # ---------------------------------------------------------------------------
 
+def spec_from_project(
+    project_dir: Path,
+    quality: QualityPreset = QualityPreset.PREMIUM,
+    target_chapters: int = 0,
+) -> _AutoSpec:
+    """从已 init 的项目目录（.novel/project.yaml）恢复 AutoSpec。
+
+    用法：当用户已经跑过 init（+ 模板）但还想跑 auto 时，
+    调用此函数复用项目元数据，避免再次手动输入 title/genre/style。
+
+    Args:
+        project_dir: 项目目录（必须有 .novel/project.yaml）。
+        quality: 质量档（默认 PREMIUM；一般 CLI 层会从 --quality 覆盖）。
+        target_chapters: 显式章数（0 = 由 __post_init__ 按 target_words/3000 自动算）。
+
+    Returns:
+        AutoSpec：从 project.yaml 字段填充的规格。
+
+    Raises:
+        FileNotFoundError: .novel/ 目录不存在（项目没 init）。
+    """
+    proj = S.load_project(project_dir)
+    meta = proj.meta or {}
+    target_words = int(meta.get("target_words") or 100000)
+    return _AutoSpec(
+        title=proj.title,
+        theme=meta.get("theme", ""),
+        genre=meta.get("genre", "现实 / 严肃文学"),
+        style=meta.get("style_preset", ""),
+        target_words=target_words,
+        target_chapters=target_chapters,
+        quality=quality,
+    )
+
+
 def run_auto_novel(
     spec: _AutoSpec,
     project_dir: Path,

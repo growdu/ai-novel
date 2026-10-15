@@ -231,6 +231,178 @@ def init(
         g_file.write_text("# 当前题材: " + genre + "\n\n" + g_block + "\n", encoding="utf-8")
     console.print(Panel.fit("[green]已创建项目:[/green] %s\n[green]标题:[/green] %s\n[green]题材:[/green] %s\n[green]文风:[/green] %s" % (proj.root, proj.title, genre, style or "（默认）"), title="novel init"))
 
+
+@app.command(name="write")
+def write(
+    name: str = typer.Argument(None, help="项目目录名（与 --here 互斥）"),
+    # ─── 需求驱动（与 --from-source 互斥；至少指定其中一个）───
+    title: str = typer.Option(None, "--title", "-t", help="小说标题"),
+    theme: str = typer.Option("", "--theme", help="一句话主题"),
+    # ─── 模仿驱动（与 --title 互斥；指定即触发 adapt 分支）───
+    from_source: str = typer.Option(None, "--from-source", "-S", help="源小说 TXT/MD 文件路径（自动提骨架 + 改编）"),
+    direction: str = typer.Option("换名 + 换壳", "--direction", "-d", help="模仿方向：换名/换壳/后传/反派视角/性别转换"),
+    # ─── 共享 ───
+    genre: str = typer.Option("现实 / 严肃文学", "--genre", "-g"),
+    style: str = typer.Option("", "--style", "-s"),
+    words: int = typer.Option(50000, "--words", "-w"),
+    chapters: int = typer.Option(0, "--chapters", help="显式章数（0=按字数自动）"),
+    quality: str = typer.Option("standard", "--quality", help="质量档：draft / standard / premium"),
+    budget: float = typer.Option(0.0, "--budget", help="成本上限 CNY；0=不限"),
+    serve: bool = typer.Option(False, "--serve", help="同时启动 Web 仪表盘"),
+    serve_port: int = typer.Option(8765, "--serve-port"),
+    plans_only: bool = typer.Option(False, "--plans-only"),
+    skip_plans: bool = typer.Option(False, "--skip-plans"),
+    here: bool = typer.Option(False, "--here"),
+    force: bool = typer.Option(False, "--force", help="已存在目录强制覆盖"),
+):
+    """一行写完整本书：需求驱动（--title）或模仿驱动（--from-source），跑完规划→写作→润色→一致性→导出。
+
+    Examples:
+        # 需求驱动
+        novel write demo --title '冬夜的灰' --theme '东北命案' --genre 悬疑 --style 冷峻 --words 60000
+
+        # 模仿驱动
+        novel write fanfic --from-source 白夜行.txt --direction 换壳 --genre 校园 --style 冷峻 --words 80000
+
+        # 模板快速开始（自动 init 后直接跑 auto）
+        novel write quick --template 东北悬疑 --title '盘锦往事' --words 80000
+    """
+    # ── 1. 校验：至少指定 --title 或 --from-source 之一 ──
+    # （--title + --from-source 可同时：模仿分支里 --title 会覆盖自动派生的标题）
+    if title is None and from_source is None:
+        console.print("[red]请指定输入：--title（需求驱动）或 --from-source（模仿驱动）[/red]")
+        raise typer.Exit(1)
+    if not here and name is None:
+        console.print("[red]请提供 NAME 或加 --here。[/red]")
+        raise typer.Exit(1)
+
+    # ── 2. 处理 quality 档 ──
+    from novel.auto_state import QualityPreset, AutoSpec
+    try:
+        quality_preset = QualityPreset(quality)
+    except ValueError:
+        console.print(f"[red]未知 quality：{quality}。可选：draft/standard/premium[/red]")
+        raise typer.Exit(1)
+
+    # ── 3. 项目目录 ──
+    project_dir = Path.cwd() if here else Path.cwd() / name
+    if not here and project_dir.exists() and any(project_dir.iterdir()):
+        if not force:
+            console.print(f"[red]目录 {project_dir} 不为空。用 --force 覆盖。[/red]")
+            raise typer.Exit(1)
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg = load_global()
+
+    # ── 4. 模仿驱动分支：先 adapt，再 init，再 auto ──
+    if from_source is not None:
+        from novel.auto_state import AutoSpec
+        from novel.auto import run_auto_novel
+        from novel.auto_state import AutoState
+
+        # 4.1 读源
+        src_path = Path(from_source)
+        if not src_path.is_absolute():
+            src_path = Path.cwd() / from_source
+        if not src_path.exists():
+            console.print(f"[red]源文件不存在：{src_path}[/red]")
+            raise typer.Exit(1)
+        source_text = src_path.read_text(encoding="utf-8")
+        if not source_text.strip():
+            console.print("[red]源文件内容为空。[/red]")
+            raise typer.Exit(1)
+
+        # 4.2 提骨架 + 改编
+        client = LLMClient(cfg)
+        console.print("[bold cyan][模仿驱动] 步骤 1/3: 提取源小说骨架...[/bold cyan]")
+        skeleton_text = G.extract_skeleton(source_text, client=client)
+        console.print("[bold cyan][模仿驱动] 步骤 2/3: 生成改编方案...[/bold cyan]")
+        adapt_text = G.adapt_novel(source_text, direction, genre, style, client=client, skeleton_text=skeleton_text)
+
+        # 4.3 init 项目
+        init_title = title or f"基于《{src_path.stem}》的{direction}"
+        proj = S.init_project(
+            project_dir, init_title, theme=theme,
+            meta={"genre": genre, "target_words": words, "style_preset": style,
+                  "source": from_source, "direction": direction},
+        )
+        # 把 adapt 结果写到项目目录
+        proj.novel_dir.mkdir(parents=True, exist_ok=True)
+        full_adapt = "# 源小说骨架\n\n" + skeleton_text + "\n\n---\n\n# 改编方案\n\n" + adapt_text
+        (proj.novel_dir / "adapt.md").write_text(full_adapt, encoding="utf-8")
+        # 预填 outline：让 auto _planning_phase 跳过 outline 生成（基于 adapt 内容继续）
+        proj.outline_path.write_text("# 大纲（基于模仿改编）\n\n" + adapt_text + "\n", encoding="utf-8")
+
+        console.print(f"[bold cyan][模仿驱动] 步骤 3/3: 进入 6 阶段流水线（PLANNING→WRITING→POLISH→CONSISTENCY→EXPORT）[/bold cyan]")
+        console.print(Panel.fit(
+            f"[green]已创建项目（模仿驱动）[/green]\n"
+            f"标题: {init_title}\n"
+            f"源: {from_source}\n"
+            f"方向: {direction} → {genre}/{style} ({words} 字)",
+            title="novel write",
+        ))
+
+        # 4.4 构造 spec 并跑 auto
+        spec = AutoSpec(
+            title=init_title, theme=theme, genre=genre, style=style,
+            target_words=words, target_chapters=chapters,
+            quality=quality_preset, budget_cny=budget,
+        )
+        return _run_auto_via_spec(spec, project_dir, cfg, budget, plans_only, skip_plans, serve, serve_port)
+
+    # ── 5. 需求驱动分支：init + auto（与原 init --auto 等价）───
+    from novel.auto_state import AutoSpec
+    from novel.auto import run_auto_novel
+
+    proj = S.init_project(
+        project_dir, title, theme=theme,
+        meta={"genre": genre, "target_words": words, "style_preset": style},
+    )
+    spec = AutoSpec(
+        title=title, theme=theme, genre=genre, style=style,
+        target_words=words, target_chapters=chapters,
+        quality=quality_preset, budget_cny=budget,
+    )
+    console.print(Panel.fit(
+        f"[green]已创建项目（需求驱动）[/green]\n"
+        f"标题: {title}\n"
+        f"题材: {genre} | 文风: {style or '（默认）'} | 字数: {words}",
+        title="novel write",
+    ))
+    return _run_auto_via_spec(spec, project_dir, cfg, budget, plans_only, skip_plans, serve, serve_port)
+
+
+def _run_auto_via_spec(
+    spec, project_dir: Path, cfg, budget: float,
+    plans_only: bool, skip_plans: bool,
+    serve: bool, serve_port: int,
+):
+    """novel write 内部 helper：起仪表盘（如需）+ 调 run_auto_novel。"""
+    from novel.auto import run_auto_novel
+
+    if serve:
+        try:
+            from novel.web import start_serve_in_thread
+            start_serve_in_thread(project_dir, port=serve_port)
+        except Exception as e:
+            console.print(f"[yellow]仪表盘启动失败（端口 {serve_port} 占用？）：{e}[yellow]")
+
+    try:
+        out = run_auto_novel(
+            spec, project_dir, cfg=cfg,
+            budget_cny=budget,
+            plans_only=plans_only,
+            skip_plans=skip_plans,
+        )
+        console.print(f"\n[bold green]✅ 完稿：[/bold green] {out}")
+        return out
+    except KeyboardInterrupt:
+        console.print("\n[yellow]用户中断。再次跑 `novel write` 自动续跑。[/yellow]")
+        raise typer.Exit(130)
+    except Exception as e:
+        console.print(f"[red]novel write 失败：{e}[red]")
+        raise typer.Exit(1)
+
 @app.command()
 def outline(
     genre: str = typer.Option(None, "--genre", "-g"),
@@ -315,78 +487,6 @@ def chapter(
         console.print(Panel(res.detect_report[:1500], title="AI 味检测（节选）"))
     if res.review_report:
         console.print(Panel(res.review_report[:1500], title="审稿（节选）"))
-
-@app.command()
-def sprint(
-    until: int = typer.Option(None, "--until", "-u", help="写到第几章"),
-    count: int = typer.Option(None, "--count", "-c", help="写几章"),
-    words: int = typer.Option(None, "--words", "-w"),
-    iters: int = typer.Option(1, "--iters", "-i"),
-    no_polish: bool = typer.Option(False, "--no-polish"),
-):
-    """自动冲刺：从最后一章后面继续写若干章。"""
-    proj = S.load_project()
-    chapters = proj.list_chapters()
-    last_no = 0
-    for c in chapters:
-        try:
-            n = int(c.stem)
-            if n > last_no:
-                last_no = n
-        except ValueError:
-            continue
-    start = last_no + 1
-    if until is not None:
-        end = until
-    elif count is not None:
-        end = start + count - 1
-    else:
-        console.print("[yellow]请指定 --until N 或 --count N。[/yellow]")
-        raise typer.Exit(1)
-    if end < start:
-        console.print("[yellow]没有需要写的章节（已经写到第 %d 章）。[/yellow]" % last_no)
-        return
-    console.print("[bold]冲刺：第 %d 章 -> 第 %d 章（%d 章）[/bold]" % (start, end, end - start + 1))
-    write(start=start, end=end, words=words, iters=iters, no_polish=no_polish)
-
-@app.command()
-def write(
-    start: int = typer.Option(1, "--start", "-s"),
-    end: int = typer.Option(1, "--end", "-e"),
-    words: int = typer.Option(None, "--words", "-w"),
-    iters: int = typer.Option(1, "--iters", "-i"),
-    no_polish: bool = typer.Option(False, "--no-polish"),
-):
-    """一次性写多章。"""
-    proj = S.load_project()
-    cfg = load_global()
-    outline_text = proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else ""
-    characters_text = proj.characters_path.read_text(encoding="utf-8") if proj.characters_path.exists() else ""
-    style = proj.style_path.read_text(encoding="utf-8") if proj.style_path.exists() else ""
-    client = LLMClient(cfg)
-    for n in range(start, end + 1):
-        plan = G.parse_chapter_plan(outline_text, n)
-        prev = S.load_chapter(proj, n - 1)
-        prev_tail = prev[-500:] if prev else ""
-        ctx = {
-            "title": proj.title,
-            "outline": outline_text,
-            "characters": characters_text,
-            "style": style,
-            "chapter_plan": plan,
-            "prev_chapter_tail": prev_tail,
-            "state": proj.state_path.read_text(encoding="utf-8") if proj.state_path.exists() else "",
-            "foreshadow": proj.foreshadowing_path.read_text(encoding="utf-8") if proj.foreshadowing_path.exists() else "",
-            "world": proj.world_path.read_text(encoding="utf-8") if proj.world_path.exists() else "",
-            "timeline": proj.timeline_path.read_text(encoding="utf-8") if proj.timeline_path.exists() else "",
-            "volumes": proj.volumes_path.read_text(encoding="utf-8") if proj.volumes_path.exists() else "",
-            "arc": (proj.arcs_dir / "_overview.md").read_text(encoding="utf-8") if (proj.arcs_dir / "_overview.md").exists() else "",
-        }
-        req = G.ChapterRequest(chapter_no=n, target_words=words or cfg.target_chapter_words)
-        console.print("\n[bold]=== 第 %d 章 ===[/bold]" % n)
-        res = G.write_chapter_extended(req, ctx, project=proj, client=client, max_iters=iters, update_after=True, verbose=True, do_polish=not no_polish)
-        S.save_chapter(proj, n, res.content)
-        console.print("[green]已保存[/green] %s | 字数 %d | 迭代 %d 轮" % (proj.chapters_dir / ("%04d.md" % n), res.word_count, res.iterations))
 
 @app.command()
 def polish(
@@ -498,141 +598,6 @@ def continue_cmd(
         wc = S.chapter_word_count(res)
         total = S.chapter_word_count(S.load_chapter(proj, no) or "")
         console.print("[green]已接写 %d 字，章节总字数：%d[/green]" % (wc, total))
-
-@app.command()
-def plan(no: int = typer.Argument(..., help="章节号")):
-    """细化某章的章节大纲。"""
-    proj = S.load_project()
-    cfg = load_global()
-    res = G.generate_chapter_plan(proj, no, client=LLMClient(cfg))
-    console.print(Panel(res, title="第 %d 章细化大纲" % no))
-    console.print("[green]已保存到[/green] " + str(proj.novel_dir / "chapter_plans" / ("%04d.md" % no)))
-
-
-@app.command(name="plan-all")
-def plan_all_cmd(
-    start: int = typer.Option(1, "--start", "-s", help="起始章节"),
-    end: int = typer.Option(0, "--end", "-e", help="结束章节（0 = 按 outline 自动）"),
-    refresh: bool = typer.Option(False, "--refresh", help="强制重新生成已有章纲"),
-    extra: str = typer.Option("", "--extra", help="传给每章的额外反馈（如 '本卷节奏偏快'）"),
-):
-    """批量生成所有章节的细化大纲（200-400 字场景规划）。
-
-    与 novel plan N 的关系：plan N 只生成一章；plan-all 一键生成全部。
-    推荐先用 plan-all 让用户先看到全本规划，再决定写哪几章。
-    """
-    proj = S.load_project()
-    cfg = load_global()
-    if not refresh:
-        # 计算已有章纲
-        plans_dir = proj.novel_dir / "chapter_plans"
-        if plans_dir.exists():
-            # 跳过已生成的（最小要求：文件存在且 > 50 字）
-            missing = []
-            target_end = end if end > 0 else _G_count_chapters(proj)
-            for n in range(start, target_end + 1):
-                p = plans_dir / ("%04d.md" % n)
-                if not p.exists() or p.stat().st_size < 50:
-                    missing.append(n)
-            if not missing:
-                console.print(f"[green]所有章纲已存在（{start}-{target_end}）。用 --refresh 强制重生成。[/green]")
-                return
-            console.print(f"批量生成 {len(missing)} 章细化大纲（{start}-{target_end} 中缺失部分）...")
-            start = missing[0]
-            end = missing[-1]
-            return _do_plan_all(proj, cfg, start, end, extra)
-    if end <= 0:
-        end = _G_count_chapters(proj)
-    if end < start:
-        console.print(f"[yellow]end ({end}) < start ({start})，无章节可生成[/yellow]")
-        return
-    console.print(f"批量生成第 {start}-{end} 章细化大纲...")
-    _do_plan_all(proj, cfg, start, end, extra)
-
-
-def _G_count_chapters(proj) -> int:
-    """从 outline 自动识别总章节数。"""
-    import re
-    if not proj.outline_path.exists():
-        return 0
-    text = proj.outline_path.read_text(encoding="utf-8")
-    matches = re.findall(r"\*\*第([一二三四五六七八九十百千零0-9]+)章", text)
-    return len(matches)
-
-
-def _do_plan_all(proj, cfg, start, end, extra):
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-    client = LLMClient(cfg)
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-        transient=False,
-    ) as progress:
-        task_id = progress.add_task("批量细化章纲", total=end - start + 1)
-        for n in range(start, end + 1):
-            try:
-                G.generate_chapter_plan(proj, n, client=client, feedback=extra)
-            except Exception as e:
-                console.print(f"  [yellow]第 {n} 章失败：{e}[/yellow]")
-            progress.update(task_id, advance=1)
-
-
-@app.command(name="plans")
-def plans_cmd(
-    no: int = typer.Argument(None, help="查看指定章节号（默认列表）"),
-    refresh: bool = typer.Option(False, "--refresh", help="重新生成指定章的章纲"),
-    extra: str = typer.Option("", "--extra", help="给 --refresh 用的提示"),
-    lines: int = typer.Option(10, "--lines", "-l", help="查看时每章显示几行"),
-):
-    """查看 / 刷新已生成的章节细化大纲。
-
-    - 不带 [N]：列出所有章纲的摘要（章号 + 前几行）
-    - 带 [N]：显示指定章的完整章纲
-    - --refresh N：重新生成指定章的章纲（用户改了人物 / 大纲后用）
-    """
-    proj = S.load_project()
-    if refresh and no is None:
-        console.print("[red]--refresh 必须指定章节号[/red]")
-        raise typer.Exit(1)
-    if refresh and no is not None:
-        cfg = load_global()
-        res = G.generate_chapter_plan(proj, no, client=LLMClient(cfg), feedback=extra)
-        console.print(Panel(res, title=f"第 {no} 章细化大纲（已刷新）"))
-        return
-    # 列表 / 新增
-    plans_dir = proj.novel_dir / "chapter_plans"
-    if not plans_dir.exists():
-        console.print("[yellow]还没有任何章纲。运行 `novel plan-all` 批量生成。[/yellow]")
-        return
-    files = sorted(plans_dir.glob("[0-9]*.md"))
-    if not files:
-        console.print("[yellow]还没有任何章纲。运行 `novel plan-all` 批量生成。[/yellow]")
-        return
-    if no is not None:
-        # 查看指定章
-        target = plans_dir / ("%04d.md" % no)
-        if not target.exists():
-            console.print(f"[red]第 {no} 章章纲不存在[/red]")
-            console.print(f"  [dim]运行：novel plan-all 或 novel plan {no}[/dim]")
-            raise typer.Exit(1)
-        console.print(Panel(target.read_text(encoding="utf-8"), title=f"第 {no} 章细化大纲"))
-        return
-    # 列表模式
-    table = Table(title=f"章节细化大纲（共 {len(files)} 章）", show_header=True)
-    table.add_column("章号", style="cyan", width=6)
-    table.add_column("字数", width=4, justify="right")
-    table.add_column("前几行")
-    for f in files:
-        n = int(f.stem)
-        text = f.read_text(encoding="utf-8")
-        first_lines = "\n".join(text.splitlines()[:lines]).strip()
-        if len(first_lines) > 60:
-            first_lines = first_lines[:57] + "..."
-        table.add_row(str(n), str(len(text)), first_lines)
-    console.print(table)
 
 @app.command()
 def doctor(
@@ -881,8 +846,20 @@ def webnovel_pack(
     sub_style: str = typer.Option("经典爽文", "--style", "-y", help="爽感文风（用 webnovel-styles 查看）"),
     words: int = typer.Option(2000000, "--words", "-w"),
     idea: str = typer.Option("", "--idea", help="金手指 / 核心设定（可选）"),
+    auto: bool = typer.Option(False, "--auto", help="建完项目直接跑 novel write 端到端（推荐）"),
+    quality: str = typer.Option("standard", "--quality", help="质量档（需 --auto）：draft / standard / premium"),
+    budget: float = typer.Option(0.0, "--budget", help="成本上限 CNY（需 --auto）；0=不限"),
 ):
-    """一键网文包：建项目 + 选网文题材 + 选爽文文风 + 写金手指。"""
+    """一键网文包：建项目 + 选网文题材 + 选爽文文风 + 写金手指 +（可选 --auto）端到端写完整本书。
+
+    Examples:
+        # 仅建项目骨架（与 v0.11 行为一致）
+        novel webnovel-pack my_book --title '凡人仙途' --theme '凡人逆袭' --idea '残破玉佩'
+
+        # 建项目 + 端到端 6 阶段流水线
+        novel webnovel-pack my_book --title '凡人仙途' --theme '凡人逆袭' --idea '残破玉佩' \\
+            --auto --genre 修仙 --style 经典爽文 --words 500000 --quality premium
+    """
     from novel.prompts import get_webnovel_genre_block, get_webnovel_style_block
     genre_block = get_webnovel_genre_block(sub_genre)
     style_block = get_webnovel_style_block(sub_style)
@@ -904,9 +881,40 @@ def webnovel_pack(
     plan_text = "## 核心设定\n\n" + (idea or "（待补充）") + "\n\n## 黄金三章骨架\n\n1. 第 1 章 - 困境：主角被压迫\n2. 第 2 章 - 觉醒：金手指出现\n3. 第 3 章 - 打脸：第一次装逼打脸\n\n## 后续节奏建议\n\n- 每 10-20 章一个升级小高潮\n- 每 30-50 章一个地图跃迁\n- 每 100 章一个 boss 战\n\n## 写作时清单\n\n- [ ] 第 1 章必须有清晰困境\n- [ ] 第 2 章金手指规则明确\n- [ ] 第 3 章打脸让读者爽到\n- [ ] 主角性格不能完美\n- [ ] 每章结尾留钩子\n"
     (target / ".novel" / "webnovel_plan.md").write_text(plan_text, encoding="utf-8")
     console.print(Panel.fit("[green]网文项目已建:[/green] " + str(target) + "\n[green]标题:[/green] " + title + "\n[green]题材:[/green] " + sub_genre + "\n[green]文风:[/green] " + sub_style, title="novel webnovel-pack"))
-    console.print("\n[dim]下一步：[/dim]")
-    console.print("  1. cd " + str(target))
-    console.print("  2. novel outline")
+    if not auto:
+        console.print("\n[dim]下一步：[/dim]")
+        console.print("  1. cd " + str(target))
+        console.print("  2. novel outline")
+        console.print("\n[dim]提示：加 --auto 一行写完整本网文。[/dim]")
+        return
+    # --auto 路径：把 webnovel_plan 内容预填到 outline，让 auto 继承网文节奏提示
+    webnovel_plan = (target / ".novel" / "webnovel_plan.md").read_text(encoding="utf-8")
+    outline_path = target / ".novel" / "outline.md"
+    if not outline_path.exists() or outline_path.stat().st_size < 200:
+        outline_path.write_text("# 大纲（网文样板）\n\n" + webnovel_plan + "\n", encoding="utf-8")
+    from novel.auto_state import AutoSpec, QualityPreset
+    try:
+        qp = QualityPreset(quality)
+    except ValueError:
+        console.print(f"[red]未知 quality：{quality}。可选：draft/standard/premium[/red]")
+        raise typer.Exit(1)
+    spec = AutoSpec(
+        title=title, theme=theme, genre=sub_genre, style=sub_style,
+        target_words=words, target_chapters=0,
+        quality=qp, budget_cny=budget,
+    )
+    from novel.auto import run_auto_novel
+    cfg = load_global()
+    try:
+        out = run_auto_novel(spec, target, cfg=cfg, budget_cny=budget)
+        console.print(f"\n[bold green]✅ 网文完稿：[/bold green] {out}")
+        return out
+    except KeyboardInterrupt:
+        console.print("\n[yellow]用户中断。再次跑 `novel write " + str(target.name) + " --auto` 续跑。[/yellow]")
+        raise typer.Exit(130)
+    except Exception as e:
+        console.print(f"[red]网文自动写作失败：{e}[/red]")
+        raise typer.Exit(1)
     console.print("  3. novel characters")
     console.print("  4. novel chapter 1  # 黄金三章第 1 章：困境")
     console.print("  5. novel chapter 2  # 金手指觉醒")
@@ -1323,65 +1331,6 @@ def fix(
             console.print(f"[green]✓ 已删除 {target}。请运行 novel chapter {no} 重写。[/green]")
     else:
         console.print(f"[green]第 {no} 章正常（{wc} 字）。[/green]")
-
-@app.command()
-def batch(
-    action: str = typer.Argument(..., help="批量动作: polish / detect / radar / title"),
-    start: int = typer.Option(1, "--start", "-s", help="起始章节"),
-    end: int = typer.Option(None, "--end", "-e", help="结束章节（默认最后一章）"),
-    skip_empty: bool = typer.Option(True, "--skip-empty", help="跳过空章节"),
-):
-    """批量执行 polish / detect / radar / title。"""
-    proj = S.load_project()
-    cfg = load_global()
-    client = LLMClient(cfg)
-    chapters = proj.list_chapters()
-    if not chapters:
-        console.print("[yellow]没有章节。[/yellow]")
-        return
-    last_no = max(int(c.stem) for c in chapters)
-    end = end or last_no
-    console.print("[bold]批量 " + action + "：第 " + str(start) + "-" + str(end) + " 章[/bold]")
-    for n in range(start, end + 1):
-        target = proj.chapters_dir / ("%04d.md" % n)
-        if not target.exists():
-            console.print("  [dim]第 " + str(n) + " 章不存在，跳过[/dim]")
-            continue
-        text = target.read_text(encoding="utf-8")
-        if skip_empty and S.chapter_word_count(text) < 100:
-            console.print("  [dim]第 " + str(n) + " 章字数过少，跳过[/dim]")
-            continue
-        try:
-            if action == "polish":
-                outline_text = proj.outline_path.read_text(encoding="utf-8") if proj.outline_path.exists() else ""
-                plan = G.parse_chapter_plan(outline_text, n)
-                prev = S.load_chapter(proj, n - 1)
-                prev_tail = prev[-500:] if prev else ""
-                msgs = P.build_polish_messages(text, plan, prev_tail, "", "")
-                res = client.chat_with_continuation(msgs, target_words=len(text) // 3, max_total_tokens=20000, temperature=0.9)
-                new_text = (res.content or "").strip()
-                S.save_chapter(proj, n, new_text)
-                console.print("  [green]第 " + str(n) + " 章已润色[/green]")
-            elif action == "detect":
-                msgs = P.build_detect_messages(text)
-                res = client.chat(msgs, temperature=0.3, max_tokens=2000)
-                p = proj.novel_dir / "reports" / ("detect_%04d.md" % n)
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(res.content, encoding="utf-8")
-                console.print("  [green]第 " + str(n) + " 章已检测 -> " + p.name + "[/green]")
-            elif action == "radar":
-                G.style_radar(proj, n, client=client)
-                console.print("  [green]第 " + str(n) + " 章已雷达[/green]")
-            elif action == "title":
-                G.generate_chapter_title(proj, n, client=client)
-                console.print("  [green]第 " + str(n) + " 章已生成标题[/green]")
-            else:
-                console.print("[red]未知动作: " + action + "。可用: polish / detect / radar / title[/red]")
-                raise typer.Exit(1)
-        except Exception as e:
-            console.print("  [red]第 " + str(n) + " 章失败: " + str(e) + "[/red]")
-    console.print("[bold]批量 " + action + " 完成[/bold]")
-
 
 @app.command()
 def diff(
@@ -1964,9 +1913,11 @@ def auto(
             console.print(f"[yellow]仪表盘启动失败（端口 {serve_port} 占用？）：{e}[/yellow]")
 
     try:
+        # state=None 让 run_auto_novel 自动从 .novel/auto_state.json 加载已存在的进度
+        # （--fresh 强制会由 run_auto_novel 内的逻辑创建新 AutoState）
         out = run_auto_novel(
             spec, proj.root, cfg=cfg,
-            resume=effective_resume, budget_cny=budget,
+            budget_cny=budget,
             plans_only=plans_only,
             skip_plans=skip_plans,
         )
