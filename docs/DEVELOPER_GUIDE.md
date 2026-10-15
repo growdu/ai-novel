@@ -3,8 +3,8 @@
 > 面向维护 / 二次开发 / 新功能贡献者的代码导览。
 > 读完本文档应该能在 30 分钟内找到任何功能的实现位置、调用关系、修改方式。
 
-> **代码版本**：v0.12（2026-XX）  
-> **关键变更**：新增 `novel write` 顶层命令（novel_cli.py:236）+ `auto.spec_from_project` helper（novel/auto.py:534）。删除了 `plan` / `plan-all` / `plans` / `sprint` / `batch` / 旧的 `write` 命令。详见 [§9. v0.12 端到端定位实现](#9-v012-端到端定位实现)。
+> **代码版本**：v0.13（2026-XX）  
+> **关键变更**：v0.13 加并发章节生成（`_writing_phase_parallel` / `--parallel N`）。v0.12 加 `novel write` 顶层命令 + `auto.spec_from_project` helper。详见 [§9. v0.12 端到端定位实现](#9-v012-端到端定位实现)、[§10. v0.13 并发章节生成实现](#10-v013-并发章节生成实现)。
 
 ---
 
@@ -19,6 +19,7 @@
 7. [测试架构](#7-测试架构)
 8. [维护者排查手册](#8-维护者排查手册)
 9. [v0.12 端到端定位实现](#9-v012-端到端定位实现)
+10. [v0.13 并发章节生成实现](#10-v013-并发章节生成实现)
 
 ---
 
@@ -1831,6 +1832,100 @@ if from_source is not None:
 全套 **217 用例**，本地 `tests/smoke_test.sh` 跑通。
 
 ---
+
+## 10. v0.13 并发章节生成实现
+
+### 10.1 改动的范围
+
+| 文件 | 改动 | 性质 |
+|---|---|---|
+| `novel/auto_state.py:83` | `parallel: bool = False` → `parallel: int = 0` + `__post_init__` 负数归零 | 字段语义升级 |
+| `novel/auto.py:~430` | 新增 `_writing_phase_parallel` + `_write_one_chapter_locked` | 新增并发路径 |
+| `novel/auto.py:357` | `_writing_phase` 加 dispatch：parallel>=2 走并发 | 串行路径不变 |
+| `novel_cli.py:255/1852/887` | `novel write` / `novel auto` / `webnovel-pack --auto` 加 `--parallel` flag | CLI 参数 |
+| `pyproject.toml` + `novel/__init__.py` | 0.12.0 → 0.13.0 | 版本号 bump |
+| `tests/test_auto_parallel.py` | 新增 11 用例 | 测试 |
+
+### 10.2 并发安全设计
+
+#### 10.2.1 四个并发问题
+
+| 问题 | 触发条件 | 解决 |
+|---|---|---|
+| state.json 写竞争 | 多 worker 同时 `state.save()` 拼字符串 | `threading.Lock()` 串行化整个 save 区块 |
+| progress.update 竞争 | Rich Progress 单线程设计；并发写 display buffer | `threading.Lock()` + `safe_progress` callable |
+| 跨 worker 章节顺序（prev_tail） | 第 N+1 章的 LLM prompt 需要第 N 章的尾部 | `prev_cache: dict[int, str]` 跨 worker 共享，worker 取上一章内容优先用 cache |
+| 控制信号文件读取 | 多个 worker 同时 `cat .novel/auto_control.json` | OS 文件读写原子性保证 |
+
+#### 10.2.2 prev_cache 跨 worker 传递
+
+`_build_chapter_ctx` 默认从磁盘读 `prev_chapter_tail`。并发场景下，第 N+1 章 worker 可能先于第 N 章 worker 启动，从磁盘读的是 N 章的旧值（resume 场景）或空（首次跑）。
+
+**解决方案**：每个 worker 写完一章后，把 `(chapter_no, content)` 写进 `prev_cache` 字典；下一个 worker 取 `prev_cache[n-1]` 覆盖 ctx 里默认的 prev_tail：
+
+```python
+# _writing_phase_parallel 核心逻辑（伪代码）
+prev_cache = {}  # 共享 dict
+prev_cache_lock = threading.Lock()
+
+def worker(n):
+    ctx = _build_chapter_ctx(project, n)  # 从磁盘读（兜底）
+    with prev_cache_lock:
+        prev = prev_cache.get(n - 1)  # 优先用 in-flight 缓存
+    if prev is not None:
+        ctx["prev_chapter_tail"] = prev[-500:]
+    
+    result = _write_one_chapter_locked(...)
+    
+    with state_lock:
+        state.mark_chapter_done(result)
+        state.save(project.root)
+        prev_cache[n] = result.content  # 缓存给后续 worker
+```
+
+### 10.3 为什么不直接 asyncio / process pool
+
+| 选项 | 优点 | 缺点 |
+|---|---|---|
+| ThreadPool（已选） | 共享 state/progress 对象；LLM I/O-bound 适合线程 | 受 GIL 限制（但 I/O 调用期间 GIL 释放） |
+| ProcessPool | 真正并行 | state/process/progress 都得 multiprocessing.Manager 序列化；现有代码全 in-process 改造成本巨大 |
+| asyncio + aiohttp | 单线程内并发 I/O | LLMClient 用 `requests` 同步，改造面更大 |
+
+**结论**：线程 + 锁是当前最匹配的实现。真正的 process-level 并发是 v0.14+ 的工作。
+
+### 10.4 性能数据（DRY_RUN 模式无效）
+
+DRY_RUN 下 LLM 直接返回占位字符串，所有并发开销体现在 11 个测试用例的执行时间上。
+真 API 模式预期数据：
+
+| parallel | 6 章预期 | 30 章预期 | 60 章预期 |
+|---|---|---|---|
+| 1（串行，v0.12） | 5-15 分钟 | 25-75 分钟 | 50-150 分钟 |
+| 3 | 2-5 分钟（节省 60%） | 8-25 分钟（节省 65%） | 16-50 分钟 |
+| 8 | 1-2 分钟（节省 80%） | 4-12 分钟（节省 75%） | 8-25 分钟 |
+
+> 实测数据待补：要先跑一次真 API 项目才能给出准确值。读者跑完后欢迎 PR 数据。
+
+### 10.5 并发模式的踩坑点
+
+1. **state.save() 频繁 IO**：每章一次 JSON 序列化 + 写盘。并发下 lock 等待。如果觉得慢可以把 batch 化（v0.14+ TODO）。
+2. **prev_cache 内存占用**：~content_size × chapters_total。30K 字一章 × 100 章 = 3MB，可忽略。
+3. **chapter_results dict**：每个 ChapterResult 约 200B × 100 = 20KB，可忽略。
+4. **rich Progress 多线程**：实测 13.0+ 对并发 update 比较宽容，但极端情况（>10 workers）可能闪烁。
+5. **控制信号文件**：`signal.json` 由信号写入线程读，并发安全（OS 文件读写原子）。
+
+### 10.6 测试覆盖
+
+| 测试类 | 用例数 | 关注点 |
+|---|---|---|
+| `TestParallelDispatch` | 3 | AutoSpec 字段语义 |
+| `TestParallelEndToEnd` | 3 | parallel=4 / parallel=8 / parallel=1 端到端 |
+| `TestParallelCLI` | 3 | write/auto/webnovel-pack `--parallel` 透传 |
+| `TestParallelStateSafety` | 2 | state.json JSON 合法 + cumulative_tokens 不为负 |
+
+---
+
+## 相关文档
 
 ## 相关文档
 

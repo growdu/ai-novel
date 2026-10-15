@@ -254,12 +254,14 @@ def write(
     serve_port: int = typer.Option(8765, "--serve-port"),
     plans_only: bool = typer.Option(False, "--plans-only"),
     skip_plans: bool = typer.Option(False, "--skip-plans"),
+    parallel: int = typer.Option(0, "--parallel", "-P", help="并发章节 worker 数（0/1=串行，>=2=并发节省 50%+ 时间；v0.13+）"),
     here: bool = typer.Option(False, "--here"),
     force: bool = typer.Option(False, "--force", help="已存在目录强制覆盖"),
 ):
     """一行写完整本书：需求驱动（--title）或模仿驱动（--from-source），跑完规划→写作→润色→一致性→导出。
 
     --template 用预设快速填题材/文风/字数；用户参数（--title/--words/...）始终优先。
+    --parallel N 开 N 个 worker 并发生成章节（I/O-bound 并发节省 50%+ 时间，DRY_RUN 模式建议 4-8）。
 
     Examples:
         # 需求驱动
@@ -374,6 +376,7 @@ def write(
             title=init_title, theme=theme, genre=genre, style=style,
             target_words=words, target_chapters=chapters,
             quality=quality_preset, budget_cny=budget,
+            parallel=parallel,
         )
         return _run_auto_via_spec(spec, project_dir, cfg, budget, plans_only, skip_plans, serve, serve_port)
 
@@ -389,6 +392,7 @@ def write(
         title=title, theme=theme, genre=genre, style=style,
         target_words=words, target_chapters=chapters,
         quality=quality_preset, budget_cny=budget,
+        parallel=parallel,
     )
     console.print(Panel.fit(
         f"[green]已创建项目（需求驱动）[/green]\n"
@@ -403,9 +407,14 @@ def _run_auto_via_spec(
     spec, project_dir: Path, cfg, budget: float,
     plans_only: bool, skip_plans: bool,
     serve: bool, serve_port: int,
+    parallel: int = 0,
 ):
     """novel write 内部 helper：起仪表盘（如需）+ 调 run_auto_novel。"""
     from novel.auto import run_auto_novel
+
+    # 把 parallel 同步到 spec（防御性，避免 CLI 端到 spec 链路漏掉）
+    if parallel and parallel >= 2:
+        spec.parallel = parallel
 
     if serve:
         try:
@@ -876,6 +885,7 @@ def webnovel_pack(
     auto: bool = typer.Option(False, "--auto", help="建完项目直接跑 novel write 端到端（推荐）"),
     quality: str = typer.Option("standard", "--quality", help="质量档（需 --auto）：draft / standard / premium"),
     budget: float = typer.Option(0.0, "--budget", help="成本上限 CNY（需 --auto）；0=不限"),
+    parallel: int = typer.Option(0, "--parallel", "-P", help="并发章节 worker 数（需 --auto；v0.13+）"),
 ):
     """一键网文包：建项目 + 选网文题材 + 选爽文文风 + 写金手指 +（可选 --auto）端到端写完整本书。
 
@@ -928,7 +938,7 @@ def webnovel_pack(
     spec = AutoSpec(
         title=title, theme=theme, genre=sub_genre, style=sub_style,
         target_words=words, target_chapters=0,
-        quality=qp, budget_cny=budget,
+        quality=qp, budget_cny=budget, parallel=parallel,
     )
     from novel.auto import run_auto_novel
     cfg = load_global()
@@ -1831,6 +1841,7 @@ def auto(
     serve_port: int = typer.Option(8765, "--serve-port", help="仪表盘端口"),
     plans_only: bool = typer.Option(False, "--plans-only", help="只跑规划阶段（生成所有章纲），不进入写作"),
     skip_plans: bool = typer.Option(False, "--skip-plans", help="跳过规划阶段，直接进入写作（用现有章纲）"),
+    parallel: int = typer.Option(0, "--parallel", "-P", help="并发章节 worker 数（0/1=串行，>=2=并发；v0.13+）"),
 ):
     """一键全自动写小说：给定最小信息，自动跑完规划→写作→润色→一致性→导出。
 
@@ -1927,6 +1938,7 @@ def auto(
         target_words=words,
         target_chapters=chapters or 0,
         quality=quality_preset,
+        parallel=parallel,
     )
 
     # 启动编排器

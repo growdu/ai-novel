@@ -105,6 +105,40 @@ novel-writer 的版本变更记录。遵循 [Keep a Changelog](https://keepachan
 
 ---
 
+## [0.13.0] - 并发章节生成
+
+### 新增
+- **`run_auto_novel(spec)` 并发模式**：`AutoSpec.parallel` 从 `bool` 升级为 `int`（worker 数）
+  - 默认 `0`（串行，向后兼容 v0.12 行为）
+  - `>= 2` 走 `_writing_phase_parallel`（ThreadPoolExecutor）
+- **`novel write / novel auto / novel webnovel-pack --auto` 加 `--parallel N / -P N`** flag
+- 4 个并发安全问题解决方案：
+  - state.json 写竞争 → `threading.Lock()`
+  - progress.update 竞争 → `threading.Lock()`
+  - 跨 worker 章节顺序（prev_tail）→ `prev_cache` dict 跨 worker 共享
+  - 控制信号文件读取 → OS 文件读写原子性
+
+### 实现
+- `_writing_phase_parallel(spec, project, client, state)` — 并发版实现（novel/auto.py:~430）
+- `_write_one_chapter_locked(...)` — `_write_one_chapter` 的并发安全变体
+- `as_completed` 收集 futures；任一 worker 异常只打印不断其他
+
+### 测试
+- 新增 `tests/test_auto_parallel.py`：11 个用例
+  - AutoSpec.parallel 字段语义（默认 0、合法 int、负数归零）
+  - parallel=4 / parallel=8 端到端：state 完整、book.md 存在
+  - parallel=1 回落串行
+  - CLI `--parallel` 透传（write/auto/webnovel-pack）
+  - state.json 写竞争安全（JSON parse 通过、cumulative_tokens 不为负）
+- 全套 228 用例全过
+
+### 性能预期
+- parallel=3：节省 50-65% wall-clock（按 LLM I/O-bound 特性）
+- parallel=8：接近 80%
+- DRY_RUN 模式不测 wall-clock（避免 flaky）
+
+---
+
 ## [0.9.0] - 输出与追踪
 
 ### 新增

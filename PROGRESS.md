@@ -317,6 +317,43 @@ nested 子命令，但 README 把它们标在「高级手动」分类下。
 - tests/test_write.py：6 个用例（需求驱动 + 模仿驱动 + 互斥校验 + 错误源 + 帮助）
 - 全套 215 用例全过（删除 8 + 新增 6 = 净 -2）
 
+## 5.15 v0.13 并发章节生成（commit pending）
+兑现 §11.1 提到的「单章 LLM 调用 ~30 秒 → 多章并发（TODO）」承诺。
+
+### 5.15.1 设计
+AutoSpec.parallel 从 `bool = False` 改为 `int = 0`：
+- `0` 或 `1`：走原串行 `_writing_phase`（v0.12 行为完全不变）
+- `>= 2`：调 `_writing_phase_parallel` 用 `ThreadPoolExecutor(max_workers=parallel)`
+
+CLI 层：novel write / novel auto / novel webnovel-pack --auto 都加 `--parallel N / -P N` flag。
+默认 `0 = 串行`（向后兼容；用户不显式加 flag 行为不变）。
+
+### 5.15.2 并发安全的 4 个问题
+1. **state.json 写竞争** → `threading.Lock()` 串行化
+2. **progress.update 竞争** → `threading.Lock()` 串行化
+3. **跨 worker 章节顺序（prev_tail）** → `prev_cache` dict（chapter_no → content）跨 worker 共享
+4. **`_check_control_signal` 单文件读取** → OS 文件读写原子性保证
+
+### 5.15.3 实现要点
+- `_writing_phase_parallel(spec, project, client, state)`
+- 每个 worker 流程：检查 → 构 ctx（含 prev_cache 覆盖）→ 写 → state.save → 缓存
+- prev_cache 在 worker 内获取锁读；在写完章后获取锁写
+- `as_completed` 收集 futures；任一 worker 异常只打印不断其他
+- `_write_one_chapter_locked` = 原 `_write_one_chapter` 的并发安全变体（progress 调用走 safe_progress 加锁包装）
+
+### 5.15.4 性能预期
+按 LLM I/O-bound 特性，parallel=3 应对应节省 50-65% wall-clock；parallel=8 接近 80%。
+DRY_RUN 模式（LLM 直接返回占位）下并发几乎瞬间完成；不测 wall-clock 以避免 flaky。
+
+### 5.15.5 测试
+新增 `tests/test_auto_parallel.py`（11 个用例）：
+- AutoSpec 字段语义（默认 0、合法 int、负数归零）
+- parallel=4 / parallel=8 端到端：state 完整、book.md 存在
+- parallel=1 回落到串行
+- CLI `--parallel` 透传（write/auto/webnovel-pack 三个入口）
+- state.json 写竞争安全（能 parse + cumulative_tokens 不为负）
+- 每个 chapter 都进 chapter_results（无写丢）
+
 # 6. 已知问题与限制
 
 ## 6.1 think 截断

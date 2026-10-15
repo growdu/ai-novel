@@ -421,6 +421,7 @@ novel write [NAME] [OPTIONS]
   --serve-port INTEGER   仪表盘端口（默认 8765）
   --plans-only           只跑规划阶段，不进入写作
   --skip-plans           跳过规划阶段，直接进入写作
+  --parallel / -P INT    并发章节 worker 数（0/1=串行，>=2=并发；v0.13+）
   --here                 就地初始化（跳过 NAME）
   --force                目标目录非空时仍执行
 ```

@@ -80,7 +80,7 @@ class AutoSpec:
     target_chapters: int = 0           # 0 = 自动 = target_words // 3000
     quality: QualityPreset = QualityPreset.PREMIUM
     budget_cny: float = 0.0            # 0 = 不限
-    parallel: bool = False             # TODO: 未来实现
+    parallel: int = 0                  # 并发 worker 数：0/1=串行，>=2=并发（v0.13）
     samples_dir: Optional[str] = None  # 自定义风格样本路径
 
     def __post_init__(self):
@@ -89,6 +89,9 @@ class AutoSpec:
             self.target_chapters = max(1, self.target_words // 3000)
         # 自动算每章目标字数
         self.per_chapter_words = max(2000, self.target_words // self.target_chapters)
+        # 兼容历史 bool 入参
+        if self.parallel < 0:
+            self.parallel = 0
 
 
 @dataclass
