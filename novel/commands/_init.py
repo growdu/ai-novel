@@ -140,6 +140,8 @@ def write(
     plans_only: bool = typer.Option(False, "--plans-only"),
     skip_plans: bool = typer.Option(False, "--skip-plans"),
     parallel: int = typer.Option(0, "--parallel", "-P", help="并发章节 worker 数（0/1=串行，>=2=并发节省 50%+ 时间；v0.13+）"),
+    wait_on_quota: bool = typer.Option(True, "--wait-on-quota/--no-wait", help="撞 minimax 配额时是否等到恢复（v0.14+）；--no-wait 直接退出 + state 保存"),
+    max_wait_seconds: int = typer.Option(21600, "--max-wait-seconds", help="撞配额单次最多等多少秒（默认 6h）"),
     here: bool = typer.Option(False, "--here"),
     force: bool = typer.Option(False, "--force", help="已存在目录强制覆盖"),
 ):
@@ -253,6 +255,8 @@ def write(
             target_words=words, target_chapters=chapters,
             quality=quality_preset, budget_cny=budget,
             parallel=parallel,
+            wait_on_quota=wait_on_quota,
+            max_wait_seconds=max_wait_seconds,
         )
         return _run_auto_via_spec(spec, project_dir, cfg, budget, plans_only, skip_plans, serve, serve_port)
 
@@ -266,6 +270,8 @@ def write(
         target_words=words, target_chapters=chapters,
         quality=quality_preset, budget_cny=budget,
         parallel=parallel,
+        wait_on_quota=wait_on_quota,
+        max_wait_seconds=max_wait_seconds,
     )
     console.print(Panel.fit(
         f"[green]已创建项目（需求驱动）[/green]\n"
@@ -288,6 +294,8 @@ def webnovel_pack(
     quality: str = typer.Option("standard", "--quality", help="质量档（需 --auto）：draft / standard / premium"),
     budget: float = typer.Option(0.0, "--budget", help="成本上限 CNY（需 --auto）；0=不限"),
     parallel: int = typer.Option(0, "--parallel", "-P", help="并发章节 worker 数（需 --auto；v0.13+）"),
+    wait_on_quota: bool = typer.Option(True, "--wait-on-quota/--no-wait", help="撞 minimax 配额时是否等到恢复（需 --auto；v0.14+）"),
+    max_wait_seconds: int = typer.Option(21600, "--max-wait-seconds", help="撞配额单次最多等多少秒（需 --auto）"),
 ):
     """一键网文包：建项目 + 选网文题材 + 选爽文文风 + 写金手指 +（可选 --auto）端到端写完整本书。
 
@@ -341,6 +349,8 @@ def webnovel_pack(
         title=title, theme=theme, genre=sub_genre, style=sub_style,
         target_words=words, target_chapters=0,
         quality=qp, budget_cny=budget, parallel=parallel,
+        wait_on_quota=wait_on_quota,
+        max_wait_seconds=max_wait_seconds,
     )
     from novel.auto import run_auto_novel
     cfg = load_global()

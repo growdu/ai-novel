@@ -415,6 +415,8 @@ novel write [NAME] [OPTIONS]
   --chapters INTEGER     显式章节数（0=按字数自动）
   --quality [draft|standard|premium]   质量档（默认 standard）
   --budget FLOAT         成本上限 CNY（0=不限）
+  --wait-on-quota / --no-wait          撞 minimax 配额时是否等到恢复（v0.14+）；默认等
+  --max-wait-seconds INT              撞配额单次最多等多少秒（默认 6h）
 
 控制：
   --serve                启动后台 Web 仪表盘
@@ -718,6 +720,23 @@ novel write . -t "..." --theme "..."  # 自动从中断处继续
 # 或：
 novel auto . -t "..." --theme "..."   # 等价（底层都调 run_auto_novel）
 ```
+
+### 6.7a 撞到 minimax 配额限制（429 / "quota exceeded"）
+
+v0.14+ 默认行为：**自动等到 quota 重置再继续**。
+
+```bash
+# 默认（推荐）：等 6 小时后自动续
+novel write demo --title X --words 50000
+
+# 不想等？加 --no-wait：撞配额立刻退出 + state 保存
+novel write demo --title X --words 50000 --no-wait
+
+# 等周配额？把上限调到 7 天
+novel write demo --title X --words 50000 --max-wait-seconds 604800
+```
+
+如进程被 Ctrl-C 安全中断，state 已保存；下次 `novel write .` 自动从中断处继续（跳过已完成章节）。
 
 ### 6.8 仪表盘 / watch 看不到最新数据
 

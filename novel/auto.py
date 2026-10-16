@@ -93,6 +93,126 @@ _DOWNGRADE_REQUESTED = False
 
 
 # ---------------------------------------------------------------------------
+# 配额自动等待（v0.14+）
+# ---------------------------------------------------------------------------
+
+def _wait_for_quota(
+    err,
+    max_wait_seconds: int = 21600,
+    chapter_no: int = 0,
+) -> bool:
+    """撞到 RateLimitError 时调用。等待 reset 时段（或 cap），Ctrl-C 可断。
+
+    返回 True = 已等完、可重试；False = 用户中断或达到 max_wait，必须退出。
+    state 落盘由调用方负责（每次循环开头已经 save 过了）。
+    """
+    import time as _t
+
+    # 计算等待秒数
+    wait = 0
+    if err.retry_after_seconds and err.retry_after_seconds > 0:
+        wait = err.retry_after_seconds + 30  # 缓冲 30s
+    elif err.reset_at and err.reset_at > 0:
+        wait = max(0, err.reset_at - int(_t.time())) + 30
+    if wait <= 0:
+        wait = 60  # 兜底
+
+    wait = min(wait, max_wait_seconds)  # cap 到用户上限
+
+    # 友善提示
+    if err.reset_at and err.reset_at > 0:
+        reset_str = _t.strftime("%Y-%m-%d %H:%M:%S", _t.localtime(err.reset_at))
+    else:
+        reset_str = "未知（请参考 minimax 控制台）"
+    ch = f"第 {chapter_no} 章" if chapter_no else "LLM 调用"
+    console.print(
+        f"\n[bold yellow]⏳ 撞到 minimax 配额限制[/bold yellow]"
+    )
+    console.print(f"   位置：{ch}")
+    console.print(f"   HTTP：{err.raw_status}")
+    if err.retry_after_seconds:
+        console.print(f"   服务器建议：等 {err.retry_after_seconds}s 后重试")
+    console.print(f"   配额重置估计：{reset_str}")
+    console.print(f"   本次等待：{wait // 60} 分钟（cap {max_wait_seconds // 60} 分钟）")
+    console.print(f"   [dim]Ctrl-C 安全退出，state 已保存，下次跑自动续。[/dim]\n")
+
+    # 可中断睡眠：每 60s 醒一次打心跳
+    start = _t.time()
+    slept = 0
+    while slept < wait:
+        chunk = min(60, wait - slept)
+        try:
+            # 检查控制信号（如 PAUSE 已在等）
+            _check_control_signal(Path.cwd() / "_dummy_for_signal" if False else Path("."))
+        except KeyboardInterrupt:
+            console.print("[yellow]用户中断 — state 已保存，下次 `novel auto` 自动续。[/yellow]")
+            return False
+        try:
+            time.sleep(chunk)
+        except KeyboardInterrupt:
+            console.print("[yellow]用户中断 — state 已保存，下次 `novel auto` 自动续。[/yellow]")
+            return False
+        slept = int(_t.time() - start)
+
+        # 心跳：每 5 分钟打印一次
+        if slept % 300 < 60 and slept > 0:
+            remain = (wait - slept) // 60
+            console.print(f"[dim]  ⏳ 还在等 quota（剩 {remain} 分钟）...[/dim]")
+
+    return True
+
+
+def _call_with_quota_retry(
+    fn,
+    *,
+    max_wait_seconds: int = 21600,
+    chapter_no: int = 0,
+    on_rate_limit=None,
+):
+    """调用 fn()；遇 RateLimitError 按 _wait_for_quota 等 + 重试。
+
+    Args:
+        fn: 可调用对象（如 lambda: client.chat(msgs, ...)）
+        max_wait_seconds: 单次撞配额最多等多久（0 = 不等，立刻抛）
+        chapter_no: 用于日志
+        on_rate_limit: 自定义回调（None 用默认打印；返回 False 不重试）
+    """
+    attempt = 0
+    from novel.llm import RateLimitError
+    while True:
+        try:
+            return fn()
+        except RateLimitError as e:
+            attempt += 1
+            if max_wait_seconds == 0 or on_rate_limit is _PASS_THROUGH:
+                # 立刻退出，不等
+                raise
+            if on_rate_limit is None:
+                keep_going = _wait_for_quota(e, max_wait_seconds, chapter_no)
+            else:
+                keep_going = on_rate_limit(e, max_wait_seconds, chapter_no, attempt)
+            if not keep_going:
+                raise
+
+
+# 哨兵：on_rate_limit 传这个表示「不等，直接抛」
+_PASS_THROUGH = object()
+
+
+def _quota_kwargs(spec, chapter_no: int):
+    """从 spec 取 (max_wait_seconds, on_rate_limit) 给 _call_with_quota_retry。
+
+    行为：
+      - wait_on_quota=False  → max_wait=0 + _PASS_THROUGH（不等，立刻抛）
+      - wait_on_quota=True   → 用 spec.max_wait_seconds + 默认 wait+log 回调
+    """
+    _ = chapter_no  # 预留：将来可基于 chapter_no 动态调整策略
+    if not getattr(spec, "wait_on_quota", True):
+        return 0, _PASS_THROUGH
+    return spec.max_wait_seconds, None
+
+
+# ---------------------------------------------------------------------------
 # 阶段 1：规划
 # ---------------------------------------------------------------------------
 
@@ -218,15 +338,24 @@ def _write_one_chapter(
     last_result = None
     retries = 0
 
-    # 第一次生成（用 extended 让 detect/review/polish 自带循环）
+
+# 第一次生成（用 extended 让 detect/review/polish 自带循环）
+    # 撞到 RateLimitError 时由 _call_with_quota_retry 内部等到 quota 重置再重试；
+    # 真 abort 时（Ctrl-C / 超 max_wait / --no-wait）抛给外层 → chapter 标 failed。
     try:
         progress.update(task_id, description=f"第 {n} 章：generate + detect + polish")
-        last_result = G.write_chapter_extended(
-            req, ctx, project=project, client=client,
-            max_iters=spec.quality.iters,
-            update_after=True,
-            verbose=False,
-            do_polish=True,
+        mw, ol = _quota_kwargs(spec, n)
+        last_result = _call_with_quota_retry(
+            lambda: G.write_chapter_extended(
+                req, ctx, project=project, client=client,
+                max_iters=spec.quality.iters,
+                update_after=True,
+                verbose=False,
+                do_polish=True,
+            ),
+            max_wait_seconds=mw,
+            chapter_no=n,
+            on_rate_limit=ol,
         )
     except Exception as e:
         last_err = str(e)
@@ -247,9 +376,15 @@ def _write_one_chapter(
     # 保存首版
     S.save_chapter(project, n, last_result.content, backup=True)
 
-    # 跑质量门控
+    # 跑质量门控（也算 LLM 调用，撞配额时同样自动等）
     progress.update(task_id, description=f"第 {n} 章：质量门控")
-    gates = run_all_gates(project, n, client, spec)
+    mw, ol = _quota_kwargs(spec, n)
+    gates = _call_with_quota_retry(
+        lambda: run_all_gates(project, n, client, spec),
+        max_wait_seconds=mw,
+        chapter_no=n,
+        on_rate_limit=ol,
+    )
     passed, failed = summarize(gates)
     if passed:
         progress.update(task_id, description=f"第 {n} 章：通过 ✓")
@@ -264,14 +399,18 @@ def _write_one_chapter(
             elapsed_ms=int((time.time() - start) * 1000),
         )
 
-    # 失败重试
+    # 失败重试（每个 LLM 调用都包 quota retry）
     while not passed and retries < spec.quality.max_retries:
         retries += 1
         progress.update(task_id, description=f"第 {n} 章：重试 {retries}/{spec.quality.max_retries}")
         feedback = _build_retry_feedback(failed, ctx)
         try:
-            last_result = _regenerate_chapter(
-                spec, project, n, ctx, client, feedback,
+            mw, ol = _quota_kwargs(spec, n)
+            last_result = _call_with_quota_retry(
+                lambda: _regenerate_chapter(spec, project, n, ctx, client, feedback),
+                max_wait_seconds=mw,
+                chapter_no=n,
+                on_rate_limit=ol,
             )
             S.save_chapter(project, n, last_result.content, backup=True)
         except Exception as e:
@@ -279,7 +418,13 @@ def _write_one_chapter(
             console.print(f"  [yellow]第 {n} 章重试 {retries} 异常：{e}[/yellow]")
             continue
 
-        gates = run_all_gates(project, n, client, spec)
+        mw2, ol2 = _quota_kwargs(spec, n)
+        gates = _call_with_quota_retry(
+            lambda: run_all_gates(project, n, client, spec),
+            max_wait_seconds=mw2,
+            chapter_no=n,
+            on_rate_limit=ol2,
+        )
         passed, failed = summarize(gates)
         if passed:
             progress.update(task_id, description=f"第 {n} 章：重试后通过 ✓")

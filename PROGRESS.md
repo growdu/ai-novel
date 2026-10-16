@@ -433,3 +433,62 @@ v0.12 时 `novel_cli.py` 2038 行装 50 命令 + helpers：
 - DEVELOPER_GUIDE §1.1 文件树：加 `novel/commands/*` 11 个模块
 - DEVELOPER_GUIDE §1.3 模块大小表：把 `novel_cli.py` 行数 2038→45；新增 11 命令模块明细
 - 模块大小对比表格：v0.12 vs v0.13
+
+## 5.17 v0.14 minimax 配额限制自动等待（commit pending）
+
+### 背景
+minimax 模型有 **5 小时**窗口配额 + **周**配额双上限。一本 30 万字小说通常要 30+ 章连续 LLM 调用，实测会撞 5 小时配额 1-2 次。
+
+旧行为（v0.13）：撞 429 直接抛异常 → 用户必须手动 `novel auto` 续跑（state 自动加载）。
+
+新行为（v0.14）：
+- 默认**自动等到 quota 重置**再继续
+- 单次最多等 `--max-wait-seconds`（默认 6 小时）
+- 超时 / Ctrl-C 干净退出 + state 已保存 → 下次 `novel auto` 自动续
+
+### 5.17.1 实现
+
+**两层架构**：
+
+1. **检测层（`novel/llm.py`）**：
+   - 新增 `RateLimitError(LLMError)` —— 携带 `reset_at` / `retry_after_seconds` / `raw_status` 元数据
+   - `_is_rate_limit_response(status, text, headers)` 检测 9 种触发条件：
+     - 429（hard signal）
+     - 403 + quota/billing 关键词
+     - 文本匹配 9 种正则：insufficient_quota / rate limit / RPM / TPM / 配额 / 余额不足 / 5小时限额 / 周用量限额 / 请求过快
+   - 命中 → 抛 `RateLimitError`（不是 generic LLMError）
+
+2. **等待层（`novel/auto.py`）**：
+   - `_call_with_quota_retry(fn, max_wait_seconds, chapter_no, on_rate_limit=None)` —— 装饰任意 fn 调用
+   - 撞 `RateLimitError` → 调用 `_wait_for_quota(err, max_wait_seconds, chapter_no)`
+   - `_wait_for_quota`：算等待秒数（`retry_after` + 30s 缓冲，cap 到 max_wait_seconds）→ 60s 一段睡眠（每段醒一次检查控制信号）→ 返回 True/False
+   - Ctrl-C 在任意段安全中断 → 返回 False → outer 把 chapter 标 failed
+   - 返回 True → retry fn → 成功继续
+
+**调用点**（v0.14 后 `_write_one_chapter` 内 3 个 LLM 调用都包了 wrapper）：
+- `G.write_chapter_extended(...)` — 写主章节
+- `run_all_gates(...)` — 跑质量门控
+- `_regenerate_chapter(...)` — 失败重试
+
+### 5.17.2 CLI + AutoSpec 字段
+
+```bash
+novel write / novel auto / novel webnovel-pack --auto:
+
+# 新增：
+  --wait-on-quota / --no-wait          # 默认 --wait-on-quota；--no-wait 直接退出 + state 留底
+  --max-wait-seconds INT              # 默认 21600（6h）；调到更长可等周配额
+```
+
+### 5.17.3 状态保留下次续
+撞配额 + 退出的那一刻，`auto_state.json` 已保存：
+- 已完成的章节：`chapters_done` 里
+- 未完成的章节：还没 mark done → 下次 `novel auto` 自动重跑（无需 --resume）
+
+### 5.17.4 测试
+- `tests/test_rate_limit.py`：26 用例
+  - 检测层：9 种配额正则全部命中；403 / 500 等不被误判
+  - retry 层：撞 → 等（mock time.sleep） → 重试 → 成功；max_wait=0 立即抛；Ctrl-C 干净中断
+  - kwarg 路由：`wait_on_quota=False` → `_PASS_THROUGH` 哨兵
+  - CLI：`--wait-on-quota/--no-wait/--max-wait-seconds` 都出现在 help
+- 全套 254 用例全过

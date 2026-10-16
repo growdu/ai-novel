@@ -129,18 +129,18 @@ graph TB
 | `novel/templates.py` | 200 | 10 个推荐模板 + `apply_template()`（过滤 None override） |
 | `novel/generator.py` | 660 | 写章节、伏笔、人物、世界 |
 | `novel/prompts.py` | 470 | 28 个 builder 函数 |
-| `novel/llm.py` | 250 | LLM HTTP + think 剥离 + 续写 |
-| `novel/auto.py` | 610 | 全自动编排器（含 `spec_from_project` + v0.13 并发 `_writing_phase_parallel`） |
+| `novel/llm.py` | ~340 | LLM HTTP + think 剥离 + 续写 + **RateLimitError 检测（v0.14+）** |
+| `novel/auto.py` | ~760 | 全自动编排器（含 `spec_from_project` + 并发 `_writing_phase_parallel` + 配额等待 `_call_with_quota_retry`（v0.14+）） |
 | `novel/web.py` | 350 | HTTP 仪表盘 |
-| `novel/auto_state.py` | 220 | 状态机 dataclass |
+| `novel/auto_state.py` | 220 | 状态机 dataclass（含 `wait_on_quota` / `max_wait_seconds` 字段） |
 | `novel/storage.py` | 195 | 项目/章节文件 I/O |
 | `novel/budget.py` | 140 | 价格表 + 累加 |
 | `novel/quality_gates.py` | 200 | 校验器 |
 | `novel/token_tracker.py` | 95 | LLMClient 包装 |
 | `novel/diff_utils.py` | 35 | difflib 封装 |
 | `novel/config.py` | 110 | .env 加载 + env helpers |
-| `novel/__init__.py` | 4 | 导出 `__version__ = "0.13.0"` |
-| **合计** | **~6000** | |
+| `novel/__init__.py` | 4 | 导出 `__version__ = "0.14.0"` |
+| **合计** | **~6300** | |
 
 **v0.13.x 模块化收益**：
 

@@ -40,6 +40,8 @@ def auto(
     plans_only: bool = typer.Option(False, "--plans-only", help="只跑规划阶段"),
     skip_plans: bool = typer.Option(False, "--skip-plans", help="跳过规划阶段，直接进入写作"),
     parallel: int = typer.Option(0, "--parallel", "-P", help="并发章节 worker 数；v0.13+"),
+    wait_on_quota: bool = typer.Option(True, "--wait-on-quota/--no-wait", help="撞 minimax 配额时是否等到恢复（v0.14+）；--no-wait 直接退出 + state 保存"),
+    max_wait_seconds: int = typer.Option(21600, "--max-wait-seconds", help="撞配额单次最多等多少秒（默认 6h）"),
 ):
     """一键全自动写小说：给定最小信息，自动跑完规划→写作→润色→一致性→导出。
 
@@ -125,6 +127,8 @@ def auto(
         target_chapters=chapters or 0,
         quality=quality_preset,
         parallel=parallel,
+        wait_on_quota=wait_on_quota,
+        max_wait_seconds=max_wait_seconds,
     )
 
     # 启动 Web 仪表盘

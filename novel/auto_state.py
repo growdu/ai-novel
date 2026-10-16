@@ -82,6 +82,8 @@ class AutoSpec:
     budget_cny: float = 0.0            # 0 = 不限
     parallel: int = 0                  # 并发 worker 数：0/1=串行，>=2=并发（v0.13）
     samples_dir: Optional[str] = None  # 自定义风格样本路径
+    wait_on_quota: bool = True          # 撞配额时自动等到重置（v0.14）
+    max_wait_seconds: int = 21600      # 撞配额单次最多等 6 小时（v0.14）
 
     def __post_init__(self):
         if self.target_chapters <= 0:
@@ -92,6 +94,8 @@ class AutoSpec:
         # 兼容历史 bool 入参
         if self.parallel < 0:
             self.parallel = 0
+        if self.max_wait_seconds < 0:
+            self.max_wait_seconds = 0  # 0 = 不等，立即退出（用 --no-wait 替代）
 
 
 @dataclass

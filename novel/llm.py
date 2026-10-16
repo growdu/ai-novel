@@ -82,6 +82,84 @@ class LLMError(RuntimeError):
     pass
 
 
+class RateLimitError(LLMError):
+    """LLM 服务配额/速率限制（minimax 5 小时/W 周用量；OpenAI TPM/RPM）。
+
+    携带让上层（auto.py 配额 handler）能优雅等待并重试的元数据：
+      - reset_at: 何时可恢复（绝对 Unix 时间戳；0 表示不可推断）
+      - retry_after_seconds: 服务器建议等待秒数（0 表示未告知）
+      - raw_status / raw_text: 原始响应方便调试
+    """
+
+    def __init__(self, message: str, reset_at: int = 0, retry_after_seconds: int = 0,
+                 raw_status: int = 0, raw_text: str = ""):
+        super().__init__(message)
+        self.reset_at = reset_at
+        self.retry_after_seconds = retry_after_seconds
+        self.raw_status = raw_status
+        self.raw_text = raw_text
+
+
+# 检测 429 / 配额文本
+_RATE_LIMIT_PATTERNS = [
+    re.compile(r"insufficient[_ ]?quota", re.IGNORECASE),
+    re.compile(r"rate[_ ]?limit[_ ]?(exceeded|reached)", re.IGNORECASE),
+    re.compile(r"\bRPM\b.*(?:limit|exceeded|reached)", re.IGNORECASE),
+    re.compile(r"\bTPM\b.*(?:limit|exceeded|reached)", re.IGNORECASE),
+    re.compile(r"配额", re.UNICODE),                       # 配额
+    re.compile(r"余额不足", re.UNICODE),           # 余额不足
+    re.compile(r"5\s*小时.{0,8}限额", re.UNICODE),  # 5小时限额
+    re.compile(r"周.{0,8}用量.{0,8}限额", re.UNICODE),  # 周用量限额
+    re.compile(r"请求过快", re.UNICODE),           # 请求过快
+]
+
+
+def _is_rate_limit_response(status_code: int, text: str, headers) -> bool:
+    """判断 HTTP 响应是否为配额/速率限制。
+
+    触发条件（满足任一即返回 True）：
+      1. status_code == 429 (Too Many Requests)
+      2. status_code == 403 + 含 "quota" / "billing" / "余额" 等付费类关键词
+      3. text 命中已知的配额模式（见 _RATE_LIMIT_PATTERNS）
+    """
+    if status_code == 429:
+        return True
+    if status_code == 403 and re.search(r"quota|billing|余额|账户", text, re.IGNORECASE):
+        return True
+    for p in _RATE_LIMIT_PATTERNS:
+        if p.search(text):
+            return True
+    return False
+
+
+def _parse_retry_after(headers) -> int:
+    """从响应头解析 Retry-After（秒）。返回 0 表示不可推断。"""
+    # requests.headers 是 CaseInsensitiveDict
+    val = headers.get("Retry-After") if headers else None
+    if not val:
+        return 0
+    try:
+        return max(0, int(val))
+    except (TypeError, ValueError):
+        # 也可能是 HTTP-date 格式；这里简化只处理秒数
+        return 0
+
+
+def _build_rate_limit_error(status_code: int, text: str, headers) -> RateLimitError:
+    retry_after = _parse_retry_after(headers)
+    # 启发式估算 reset_at：仅当 retry_after 已知
+    import time as _t
+    reset_at = int(_t.time() + retry_after) if retry_after > 0 else 0
+    msg = "rate limit: " + str(status_code) + " retry_after=" + str(retry_after) + "s body=" + text[:200]
+    return RateLimitError(
+        message=msg,
+        reset_at=reset_at,
+        retry_after_seconds=retry_after,
+        raw_status=status_code,
+        raw_text=text[:400],
+    )
+
+
 class LLMClient:
     def __init__(self, cfg: GlobalConfig | None = None):
         self.cfg = cfg or GlobalConfig()
@@ -125,6 +203,9 @@ class LLMClient:
                 time.sleep(min(2 ** attempt, 8))
                 continue
             if resp.status_code != 200:
+                # 先检测是否为配额/速率限制（minimax 5小时/W 周用量；OpenAI TPM/RPM）
+                if _is_rate_limit_response(resp.status_code, resp.text, resp.headers):
+                    raise _build_rate_limit_error(resp.status_code, resp.text, resp.headers)
                 raise LLMError("api " + str(resp.status_code) + ": " + resp.text[:400])
             data = resp.json()
             content = (
@@ -222,6 +303,8 @@ class LLMClient:
             url, headers=headers, json=payload, timeout=self.cfg.request_timeout, stream=True
         ) as resp:
             if resp.status_code != 200:
+                if _is_rate_limit_response(resp.status_code, resp.text, resp.headers):
+                    raise _build_rate_limit_error(resp.status_code, resp.text, resp.headers)
                 raise LLMError("stream " + str(resp.status_code) + ": " + resp.text[:300])
             for line in resp.iter_lines():
                 if not line:

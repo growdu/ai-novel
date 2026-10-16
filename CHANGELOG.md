@@ -176,6 +176,43 @@ novel/commands/
 
 ---
 
+## [0.14.0] - 配额限制自动等待
+
+### 背景
+minimax / OpenAI 等 LLM 服务有 quota 限额（minimax 5 小时 + 周用量）；
+跑长篇小说过程中常被 429 / "quota exceeded" 中断。v0.13 之前用户必须手动重跑。
+
+### 新增
+- **`novel.llm.RateLimitError(LLMError)`**：携带 `reset_at` / `retry_after_seconds` / `raw_status` 元数据
+- **检测层**：429 / 403+quota / 9 种正则（insufficient_quota / RPM / TPM / 配额 / 余额不足 / 5小时限额 / 周用量限额 / 请求过快 ...）
+- **等待层**：
+  - `auto._call_with_quota_retry(fn, max_wait_seconds, chapter_no)` — 装饰任意 LLM 调用
+  - `auto._wait_for_quota(err, max_wait_seconds, chapter_no)` — 算 retry_after + 30s 缓冲，60s 一段可中断睡眠
+- **`AutoSpec` 字段**：
+  - `wait_on_quota: bool = True` — 撞配额自动等到恢复
+  - `max_wait_seconds: int = 21600` — 单次最多等 6 小时
+- **CLI flags**（novel write / novel auto / webnovel-pack --auto）：
+  - `--wait-on-quota / --no-wait`
+  - `--max-wait-seconds INT`
+
+### 行为
+- 默认行为（v0.14）：撞配额 → 自动等到 reset 时段（最多 6h）→ 续写
+- 撞周配额（> 6h）：自动等 6h 然后放弃 → state 保存退出 → 用户 `novel auto` 自动续
+- Ctrl-C 任何时候安全中断 → state 已保存，下次手动跑时自动跳过已完成
+
+### 兼容性
+零行为变化：对没用过 quota 的用户来说，v0.13 → v0.14 完全透明
+
+### 测试
+- 新增 `tests/test_rate_limit.py`：26 用例
+  - 检测层：9 种配额正则 + 403/500 误判防护
+  - retry 层：撞 → 等 → 重试 → 成功；max_wait=0 立即抛；Ctrl-C 干净中断；`_PASS_THROUGH` 哨兵
+  - kwarg 路由：wait_on_quota → (max_wait, on_rate_limit)
+  - CLI：3 个新 flag 全部进 help
+- 全套 **254 用例**全过（228 + 26）
+
+---
+
 ## [0.9.0] - 输出与追踪
 
 ### 新增
