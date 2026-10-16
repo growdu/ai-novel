@@ -774,5 +774,157 @@ out = run_auto_novel(
 
 ---
 
+## 14. v0.13.x 模块化设计
+
+### 14.1 动机
+v0.12 时 `novel_cli.py` 2038 行装 50 个 @app.command() + 若干 helpers：
+- 加新命令要在 2000 行里找位置
+- 命令名全局冲突（如 `write` 被旧命令占用，新写的 `novel write` 顶层入口要换名字）
+- 一处改动影响整文件，对 hot reload / 静态分析都不友好
+- 阅读时认知负担太重（一个文件无法只关心「写小说的代码」而不被无关命令分心）
+
+### 14.2 切分原则
+**按功能而不是按类型切**。原本可以按「类/函数/全局」类型切，但更合理的是按用户意图切：
+- config 层（setup / config / version / prompt）
+- presets 层（genres / styles / templates）
+- init 层（init / write / webnovel_pack — 顶层入口）
+- run 层（auto / serve）
+- planning 层（outline / characters / world / volumes）
+- writing 层（chapter / continue / chat / expand_scene / title）
+- qa 层（polish / detect / radar）
+- state 层（timeline / state / rolling / check / arc / foreshadow / gaps）
+- project 层（list / info / whereami / status / audit / progress / history）
+- diagnose 层（doctor / retry-stuck / rollback / fix / diff）
+- adapt 层（adapt / fanfic）
+- output 层（export / index）
+
+### 14.3 模块接口
+每个 `novel/commands/_xxx.py`：
+- 自带 imports（只 import 自己用的）
+- 自建 `console = Console()`（不共享全局）
+- 暴露 N 个**裸函数**（不直接 @app.command()）
+- 暴露 `register(app: typer.Typer)` 函数，循环注册
+
+```python
+# novel/commands/_init.py
+def init(...): ...  # 裸函数
+def write(...): ...  # 裸函数
+
+def register(app):
+    app.command()(init)
+    app.command(name="write")(write)
+```
+
+`novel/commands/__init__.py` 的 `register_all(app)` 顺序遍历各模块。
+
+### 14.4 全局 callback 必须留在 entry
+`@app.callback()` 用于定义 `--version / --quiet` 这种全局 flag。这种 callback 必须装饰到 main `app`，而不能跨模块注册。所以：
+- `novel_cli.py` 保留 `_main` callback + `app = typer.Typer(...)` + `register_all(app)`
+- 各模块**不能**用 `@app.callback()`
+
+### 14.5 设计权衡
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 子模块用 `_xxx` 前缀 | ✅ | 让 import 语句按字母排序时 commands 在最前 |
+| `console` 每个模块独立 | ✅ | 避免模块间隐式耦合 |
+| `register(app)` 在每个模块底部 | ✅ | 模块自描述，refactor 时整个文件移走也能用 |
+| `register_all` 在 `__init__.py` | ✅ | 单一注册入口，便于调试（「到底注册了哪些命令」）|
+| 模块内命令用裸函数 | ✅ | 测试时可以单独 import 函数测，无需构造 typer app |
+
+### 14.6 收益
+- `novel_cli.py`: 2038 → 45 行
+- 单文件最大: 389 行（`_project.py`）
+- 加新命令成本: 新建 ~150 行 + 1 行 register
+- 命名冲突: 消除（每模块独立命名空间）
+- 测试隔离: 可单独 import `from novel.commands._init import write` 测
+
+---
+
+## 15. v0.14 配额限制自动等待
+
+### 15.1 问题
+minimax / OpenAI 等 LLM 服务有 quota 限制：
+- **minimax**：5 小时窗口 + 周用量双上限
+- **OpenAI**：RPM / TPM 限制
+- 一本 30 万字小说 30+ 章 × 每次 ~10 LLM 调用 ≈ 300+ 次；实战必撞 5 小时上限
+
+旧行为（v0.13 及之前）：撞 429 / "quota exceeded" → 抛 LLMError → 用户必须手动 `novel auto` 续跑。
+
+新行为（v0.14）：**自动等到 quota 重置再继续**；超时 / 用户中断也安全保留 state。
+
+### 15.2 两层架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Layer 1: 检测（novel/llm.py）                                    │
+│  ─ 检测 9 种配额 trigger（429 / 403+quota / insufficient_quota /  │
+│    RPM/TPM / 配额 / 余额不足 / 5小时限额 / 周用量限额 / 请求过快） │
+│  ─ 抛 RateLimitError（含 reset_at + retry_after_seconds）          │
+└─────────────────────────────────────────────────────────────────┘
+                                ↓ RateLimitError
+┌─────────────────────────────────────────────────────────────────┐
+│  Layer 2: 等待与重试（novel/auto.py）                            │
+│  ─ _call_with_quota_retry(fn, max_wait_seconds, chapter_no)        │
+│  ─ 撞 RateLimitError → _wait_for_quota() 等到 reset + 30s 缓冲     │
+│  ─ 60s 分段可中断睡眠（Ctrl-C 安全）                              │
+│  ─ max_wait_seconds cap（默认 6h，覆盖 5h 配额窗口）            │
+│  ─ 超时 / 中断 → 抛原 RateLimitError → chapter 标 failed / 整体停   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 15.3 关键决策
+
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 默认 wait / 不 wait | **默认 wait**，加 `--no-wait` 显式退出 | 长任务场景下用户最关心「自动恢复」；短任务可显式关闭 |
+| cap 默认 6h 还是更长 | 默认 **6h**（21600s） | 5h 配额典型场景能自动等；更长场景用户自行加 flag |
+| sleep 分段粒度 | **60s** | 兼顾：能快速响应 Ctrl-C；又不会频繁调度 |
+| 等待期间是否继续写其他章节 | **否**（单章 writer 阻塞等）| 一章绪写等 5h 是常态；并发 writer 在另一章也会立刻撞同样配额，等于徒增复杂度 |
+| state 保存粒度 | **每章存档**（已有）+ **撞配额时自动落盘**（新）| 撞配额到下次重启期间任何中断都安全 |
+| `--no-wait` 退出语义 | 直接抛 RateLimitError → chapter 标 failed | 用户明确表达「现在不要等」 |
+
+### 15.4 与 v0.13 并发的协作
+
+并发章节生成（`_writing_phase_parallel`）会让多个 worker 同时调用 LLM：
+- 撞配额是同时撞的（几个 worker 都拿 429）
+- 每个 worker 独立 `_call_with_quota_retry`：
+  - 在第一个 429 时记下 `reset_at`
+  - 后续 worker 拿到 error 看到 `reset_at` 知道何时可用
+  - 但每个 worker 会独立 sleep → 可能多个 worker 同时 sleep 到 reset_at，然后一起 retry → 撞到 429 死循环风险
+
+**v0.14 简化**：并发模式撞到配额后，**所有 worker 共享一个等待时间**（通过临时协调），但实现复杂度高，目前实际行为是「第一个 worker sleep 后 retry，第二个 worker 看到 reset 仍未到继续 sleep」。这本质上是顺序 retry，但每个 worker 独立倒计时。最坏情况 = 不必要的串行化。
+
+**未来优化**（不在 v0.14 范围）：把 `_call_with_quota_retry` 改为读取进程级 shared event，到 reset_at 后触发所有 worker 重试。
+
+### 15.5 可观测性
+- 用户能看到：撞配额时控制台打印 HTTP 状态 / reset 估计 / 等待时长
+- 心跳：每 5 分钟打印「⏳ 还在等 quota（剩 X 分钟）」
+- 退出信息：明确说明「下次 novel auto 自动续」+ 状态位置
+- 状态文件：`.novel/auto_state.json` 已落盘，无丢失风险
+
+### 15.6 与续跑的接续
+用户即便 Ctrl-C 或 `--no-wait` 退出，下次 `novel auto` 自动接续：
+1. 读 `.novel/auto_state.json`，找 `chapters_done` set
+2. spec 仍可重建（来自 project.yaml）
+3. `_write_one_chapter(n)` 写入时，n 不在 `chapters_done` → 重写
+4. 撞配额又自动等
+
+整个机制是**幂等的**：重复跑同一段命令，不会破坏现有章节。
+
+---
+
+## 16. v0.15+ 演进方向
+
+详见 PROGRESS §7。这些都不属当前定位「输入 → 自动写完整本书」的硬要求：
+
+- **OpenViking 集成**：minimax 长期记忆库，跨项目复用人物/伏笔
+- **REPL 模式**：与 AI 进行多轮对话式协作
+- **多模型协作**：强模型审稿、快模型润色
+- **TUI 终端图形界面**
+
+按「内核精简」原则，这些将作为「附加模块」而非核心功能。
+
+---
+
 ## 附录 A：相关文档
 - [CONTRIBUTING.md](../CONTRIBUTING.md) - 贡献指南

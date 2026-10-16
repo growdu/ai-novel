@@ -453,6 +453,24 @@ novel write quick --template 东北悬疑 --title '盘锦往事' --words 80000
 5. EXPORTING（合并为 `book.md`）
 6. DONE（`state.phase = DONE`，`book.md` 存在）
 
+**三档 quality 对比**：
+
+| 档 | 章节迭代 | 字数容差 | AI 味阈值 | 雷达阈值 | 适合 |
+|---|---|---|---|---|---|
+| `draft` | 1 | ±30% | 跳过 | 跳过 | 网文冲量（速度优先）|
+| `standard` | 2 | ±20% | < 50 | ≥ 60 | 一般场景（默认）|
+| `premium` | 3 | ±10% | < 30 | ≥ 70 | 严肃向（质量优先）|
+
+**撞到 minimax 配额怎么办（v0.14+ 默认行为）**：
+- 默认 `--wait-on-quota`：**自动等 quota 重置再继续**，最多等 6 小时
+- 等不情愿？加 `--no-wait` 立刻退出，下次 `novel write .` 自动续
+- 周配额撞了调 `--max-wait-seconds 604800`（7 天）
+- 详细：[§6.7a 撞到 minimax 配额限制](#67a-撞到-minimax-配额限制429--quota-exceeded)
+
+**并发（加速）**：
+- `--parallel 4` 开 4 个 worker 并发生成章节，比串行省 50%+ 时间
+- 详情：见 [§4.11 并发生成](#411-并发生成)
+
 #### `novel webnovel-pack <NAME> --auto`
 
 网文专项（黄金三章骨架 + 爽感节奏）。`--auto` 一行写完整本网文：
@@ -463,6 +481,72 @@ novel webnovel-pack my_x --title "凡人仙途" --theme "凡人逆袭" \
 ```
 
 不加 `--auto` 只建项目骨架，行为与 v0.11 一致（向后兼容）。
+
+`--auto` 模式同样支持 `--parallel` 与 `--wait-on-quota`。
+
+### 4.11 并发生成（v0.13+）
+
+`--parallel N`（或 `-P N`）让章节生成并发：
+
+```bash
+# 串行（默认）：逐章写
+novel write demo --title X --words 60000
+
+# 4 worker 并发：节省 50%+ 时间
+novel write demo --title X --words 60000 --parallel 4
+
+# 大项目：8 worker（接近理论上限）
+novel write my_novel --title X --words 600000 --parallel 8
+```
+
+**并发原理**：`ThreadPoolExecutor` 并发 LLM 调用（I/O-bound）。
+4 个并发安全问题已处理：
+1. `state.json` 写竞争：`threading.Lock()` 串行化
+2. `progress.update` 竞争：`threading.Lock()` 串行化
+3. 跨 worker 章节顺序（`prev_tail`）：`prev_cache` dict 共享
+4. 控制信号文件读取：OS 文件读写原子
+
+**当并发撞到配额**：每个 worker 独立检测 429 → 等 quota → 重试。
+多个 worker 共享 reset 时间，可能轮流 await 到 reset → 一起 retry。
+
+**性能预期**：
+
+| parallel | 6 章 | 30 章 | 60 章 |
+|---|---|---|---|
+| 1（默认） | 5-15 分钟 | 25-75 分钟 | 50-150 分钟 |
+| 3 | 2-5 分钟（-60%）| 8-25 分钟 | 16-50 分钟 |
+| 8 | 1-2 分钟（-80%）| 4-12 分钟 | 8-25 分钟 |
+
+（实测待你跑完真 API 后补充）
+
+### 4.12 FAQ
+
+**Q：我跑 `novel write` 在第 30 章挂了，下次再跑会重写 1-29 章吗？**
+A：不会。`auto_state.json` 记着已完成的章节号；下次 `novel write` 自动跳过。**首次或中断后无需任何参数**，照常跑就行。
+
+**Q：5 万字的小说我应该选什么 quality？**
+A：
+- 长篇网文冲量：`draft`（最快）
+- 严肃文学 / 商业小说：`premium`（最多 3 轮迭代）
+- 默认 `standard` 对一般场景够用
+
+**Q：`--parallel 4` 跟单 worker 写出来质量有区别吗？**
+A：没有。每个 worker 调同一模型同一 prompt，输出确定性来自 temperature 而非并发。只差在 wall-clock。
+
+**Q：我 Ctrl-C 退出了，下次跑会丢进度吗？**
+A：不会。每章写完都 `state.save()`，下次 `novel write .` 自动从中断处继续。
+
+**Q：我已经 init 过项目，能直接 `novel write` 而不重新 init 吗？**
+A：能。`novel write .` 加 `--here` 就在当前目录写。状态自动从 `.novel/project.yaml` 恢复。
+
+**Q：`novel auto` 和 `novel write` 啥区别？**
+A：
+- `novel write`：v0.12+ 推荐入口；自动 init + 跑 6 阶段；适合新项目
+- `novel auto`：v0.11 旧入口；项目已 init 时用；底层和 `novel write` 共享 `run_auto_novel()`
+- 完全等价：两条命令底层都调同一个 6 阶段流水线
+
+**Q：`book.md` 在哪？**
+A：`<project_dir>/book.md`。完整书稿（所有章节顺序合并）。
 
 ### 4.9 提示词管理
 
@@ -542,30 +626,42 @@ novel auto [NAME] [OPTIONS]
 
 ## 5. 常见工作流
 
-### 5.1 短篇：1 天写完
+### 5.1 短篇：30 分钟完成（v0.12+ 推荐）
 
 ```bash
-# 早上 30 分钟
-novel init short --title "..." --words 30k
-novel outline; novel characters
+# 一行就够：5 万字短篇
+novel write short --title "我的短篇" --theme "一个夏天的故事" \
+  --genre 现实 --style 朴素 --words 50000 \
+  --quality premium --budget 10
 
-# 下午 2 小时（速度优先）
-for i in 1 2 3 4 5 6 7 8 9 10; do
-  novel chapter $i --no-polish
-done
-
-# 晚上 1 小时（手动润色已写完的章节）
-novel polish 5 --extra "强化结尾余韵"
-# 上面那条不再是必需的，因为 novel write 的 POLISHING 阶段已经自动跑过了。
-# 只有在 auto 跑完后还想手润某章时才用 novel polish N。
+# 想先看章纲再写？
+novel write short --title X --genre 悬疑 --words 50000 --plans-only
+# 看完 .novel/outline.md 觉得 OK 再跑：
+novel write short --title X --genre 悬疑 --words 50000 --skip-plans --quality premium
 ```
+
+旧版手动 `init + outline + chapter ×N` 在 v0.12+ 已不再推荐——除非你想手动覆盖某章。
 
 ### 5.2 长篇 1 周出 70%
 
-| 天 | 工作 | 命令 |
+**v0.12+ 推荐：一行跑长篇**
+
+```bash
+# 周一早上 9 点（开 4 worker + 启 Web 仪表盘后台监控）
+novel write my_novel --title "百川归海" --theme "..." \
+  --genre 都市 --style 冷峻 --words 600000 --chapters 120 \
+  --quality standard --parallel 4 --serve --budget 80
+
+# 撞 5h 配额时：自动等 + 心跳提示；Ctrl-C 安全退出；
+# 下次再跑（ctrl-c 第二天）继续从第 N 章续写
+```
+
+**旧版手动 7 天工作流**（仍支持但不推荐）：
+
+| 天 | 工作 | 命令（手动） |
 |---|------|------|
 | 周一 | 规划 | `outline / characters / world / volumes` |
-| 周二-周四 | 写 1-25 章 | `novel chapter N` 或 `sprint --count 5` |
+| 周二-周四 | 写 1-25 章 | `novel chapter N` 循环 |
 | 周五 | 检查 | `novel check / gaps / audit` |
 | 周末 | 润色关键章 | `novel polish 1 --5 35 70` |
 

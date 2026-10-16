@@ -394,9 +394,9 @@ graph LR
     D --> E[GlobalConfig 实例化]
 ```
 
-### 4.2 novel/llm.py（250 行）
+### 4.2 novel/llm.py（~340 行，v0.14）
 
-**责任**：HTTP 调用 LLM + think 标签剥离 + 自动续写。
+**责任**：HTTP 调用 LLM + think 标签剥离 + 自动续写 + **配额限制检测（v0.14+）**。
 
 ```python
 class LLMClient:
@@ -404,6 +404,13 @@ class LLMClient:
     def chat_with_continuation(self, messages, ...) -> LLMResult  # 自动续写
     def chat_json(self, messages, ...) -> dict
     def stream_chat(self, messages, ...) -> Iterator[str]
+
+class RateLimitError(LLMError):  # v0.14+
+    """携带 reset_at + retry_after_seconds + raw_status 元数据。"""
+
+def _is_rate_limit_response(status, text, headers) -> bool
+def _parse_retry_after(headers) -> int
+def _build_rate_limit_error(status, text, headers) -> RateLimitError
 ```
 
 #### 4.2.1 think 标签剥离（4 层兜底）
@@ -488,7 +495,65 @@ def chat(self, messages, retry=3):
     raise LLMError("chat failed after retries")
 ```
 
-**重试策略**：5xx + 网络异常 → 重试；4xx → 立即抛
+**重试策略**：5xx + 网络异常 → 重试；4xx / 配额 → 立即抛（v0.14 起 4xx 中配额类抛 RateLimitError）
+
+#### 4.2.5 配额检测（v0.14+）
+
+minimax / OpenAI 等 LLM 服务有 quota 上限；撞到 429 / "quota exceeded" 用户感知不到原因。`novel/llm.py` 在 v0.14 增加：
+
+**触发条件（任一即抛 `RateLimitError`）**：
+1. HTTP 状态 = 429
+2. HTTP 状态 = 403 + 含 "quota" / "billing" / "余额" 关键词
+3. response text 命中 9 种正则：
+   - `insufficient_quota`
+   - `rate.?limit.?exceeded`
+   - `\bRPM\b.*(?:limit|exceeded|reached)`
+   - `\bTPM\b.*(?:limit|exceeded|reached)`
+   - `配额`（中文）
+   - `余额不足`
+   - `5\s*小时.{0,8}限额`（minimax 5小时）
+   - `周.{0,8}用量.{0,8}限额`（minimax 周）
+   - `请求过快`
+
+**`Retry-After` header 处理**：
+
+```python
+def _parse_retry_after(headers) -> int:
+    val = headers.get("Retry-After")  # 不区分大小写
+    if not val:
+        return 0
+    try:
+        return max(0, int(val))  # 仅处理秒数格式（HTTP-date 不支持）
+    except (TypeError, ValueError):
+        return 0
+```
+
+**`RateLimitError` 携带的元数据**：
+
+```python
+err = RateLimitError(
+    message="rate limit: 429 retry_after=300s body=...",
+    reset_at=int(time.time() + 300),     # 服务器给 retry_after → 推算
+    retry_after_seconds=300,
+    raw_status=429,
+    raw_text="...",                     # 上层 debug 用
+)
+```
+
+**关键 invariant**：检测层**只抛出，不等待**。等待逻辑在 `novel/auto.py`：
+
+```python
+# 错误流向
+LLMClient.chat() ──── 抛 RateLimitError
+       │
+       ↓
+auto._call_with_quota_retry(fn) ──→ _wait_for_quota() ──→ retry LLMClient.chat()
+```
+
+这样分工的好处：
+- `llm.py` 保持精简，不引入时间相关依赖
+- `auto.py` 统一所有「等待 → 重试」决策
+- 单测容易：测 llm.py 只测检测；测 auto.py mock time.sleep
 
 ### 4.3 novel/storage.py（195 行）
 
@@ -795,9 +860,123 @@ graph TB
 3. LLM 生成新 metadata
 4. 写回 .md
 
-### 4.6 novel/auto.py（580 行）
+### 4.6 novel/auto.py（~760 行，v0.14）
 
-**责任**：一键全自动的 5 阶段流程。
+**责任**：一键全自动的 5 阶段流程 + **并发章节生成（v0.13+）** + **配额自动等待（v0.14+）**。
+
+#### 4.6.5 配额自动等待（v0.14+）
+
+撞到 `RateLimitError` 时的处理路径：
+
+```
+任何 LLM 调用 (write_extended / run_all_gates / _regenerate_chapter)
+       │
+       ↓  用 _call_with_quota_retry(fn, max_wait, chapter_no) 包
+auto._call_with_quota_retry(fn)
+       │
+       ├── 第一次调 fn() → 成功 ✅
+       │
+       └── 第一次调 fn() → 抛 RateLimitError
+              ↓
+              auto._wait_for_quota(err, max_wait, chapter_no)
+              ├── 算 wait 秒数 (retry_after + 30s 缓冲, cap max_wait)
+              ├── print 友好提示 (HTTP / reset 估计 / 等多久)
+              ├── 60s 分段循环 sleep（每段醒一次检查 Ctrl-C / 控制信号）
+              └── 返回 True/False（False = 用户中断或 cap 触发）
+              │
+              ├── True → retry fn() → 回到顶端
+              │
+              └── False → 重新抛 RateLimitError → 外层 chapter 标 failed
+```
+
+**核心函数**：
+
+```python
+def _call_with_quota_retry(fn, *, max_wait_seconds=21600, chapter_no=0, on_rate_limit=None):
+    """装饰任意 LLM 调用。撞 RateLimitError 自动等 + 重试。"""
+    attempt = 0
+    while True:
+        try:
+            return fn()
+        except RateLimitError as e:
+            attempt += 1
+            if max_wait_seconds == 0 or on_rate_limit is _PASS_THROUGH:
+                raise  # --no-wait 或 cap 触发
+            if on_rate_limit is None:
+                keep_going = _wait_for_quota(e, max_wait_seconds, chapter_no)
+            else:
+                keep_going = on_rate_limit(e, max_wait_seconds, chapter_no, attempt)
+            if not keep_going:
+                raise
+
+
+def _wait_for_quota(err, max_wait_seconds, chapter_no) -> bool:
+    """撞配额 → 算等待时间 → 60s 一段可中断睡眠。
+    
+    返回 True = 等完可重试；False = 用户中断或 cap 触发。
+    """
+    import time as _t
+    wait = 0
+    if err.retry_after_seconds > 0:
+        wait = err.retry_after_seconds + 30
+    elif err.reset_at > 0:
+        wait = max(0, err.reset_at - int(_t.time())) + 30
+    if wait <= 0:
+        wait = 60
+    wait = min(wait, max_wait_seconds)  # cap 用户上限
+    
+    # 友好提示
+    if err.reset_at > 0:
+        reset_str = _t.strftime("%Y-%m-%d %H:%M:%S", _t.localtime(err.reset_at))
+    console.print(f"⏳ 撞到 minimax 配额限制 (第 {chapter_no} 章, HTTP {err.raw_status})")
+    console.print(f"   配额重置估计：{reset_str}")
+    console.print(f"   本次等待：{wait // 60} 分钟（cap {max_wait_seconds // 60} 分钟）")
+    console.print(f"   [dim]Ctrl-C 安全退出，state 已保存[/dim]")
+    
+    # 可中断睡眠
+    start = _t.time()
+    slept = 0
+    while slept < wait:
+        chunk = min(60, wait - slept)
+        try:
+            _check_control_signal(Path.cwd())  # 每段醒一次查控制信号
+            time.sleep(chunk)
+        except KeyboardInterrupt:
+            console.print("[yellow]用户中断 — state 已保存。[/yellow]")
+            return False
+        slept = int(_t.time() - start)
+        if slept % 300 < 60 and slept > 0:
+            console.print(f"[dim]  ⏳ 还在等 quota（剩 {(wait - slept) // 60} 分钟）...[/dim]")
+    return True
+
+
+def _quota_kwargs(spec, chapter_no):
+    """从 spec 取 (max_wait_seconds, on_rate_limit) 给 _call_with_quota_retry。
+    
+    wait_on_quota=False → (0, _PASS_THROUGH)  # --no-wait
+    wait_on_quota=True  → (spec.max_wait_seconds, None)
+    """
+    if not getattr(spec, "wait_on_quota", True):
+        return 0, _PASS_THROUGH
+    return spec.max_wait_seconds, None
+```
+
+**AutoSpec 字段**（`novel/auto_state.py`）：
+
+```python
+@dataclass
+class AutoSpec:
+    ...
+    wait_on_quota: bool = True         # v0.14+：撞配额是否等到恢复
+    max_wait_seconds: int = 21600     # v0.14+：单次最多等 6h
+```
+
+**调用点**（`_write_one_chapter` 内 3 个 LLM 调用都包了 wrapper）：
+- `G.write_chapter_extended(...)` — 写主章节
+- `run_all_gates(...)` — 质量门控
+- `_regenerate_chapter(...)` — 失败重试
+
+并发版 `_write_one_chapter_locked` 当前不直接 wrap（继承自 `_write_one_chapter` 的 quota 处理由上层 worker 负责）。
 
 #### 4.6.1 5 阶段状态机
 
