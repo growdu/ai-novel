@@ -978,6 +978,92 @@ class AutoSpec:
 
 并发版 `_write_one_chapter_locked` 当前不直接 wrap（继承自 `_write_one_chapter` 的 quota 处理由上层 worker 负责）。
 
+#### 4.6.6 自测真 API 性能（v0.14+ 缺数据，欢迎贡献）
+
+**为什么缺**：DRY_RUN 模式只测编排调度；`_writing_phase_parallel` 的 50-65% 节省预期是按 LLM I/O-bound 性质推算的——真实的 wall-clock 数字必须用真 API 跑一遍才有。
+
+> **项目维护者没买 minimax 真实凭证**（开平 401 unauthorized），也无意让真 API 数据进 commit 历史。  
+> 你的真 API 实测数据是补上这一缺口的关键。请按下方步骤跑 + 报告。
+
+##### 步骤 1：准备工作
+
+```bash
+# 确认凭据有效（不要把真 key 贴到 chat / commit）
+python3 novel_cli.py config --show | grep api_key
+# api_key 应是真值（如 sk-xxxx...）而不是 your***ere
+
+# 如果还是占位符：
+python3 novel_cli.py setup --force
+```
+
+##### 步骤 2：跑基准（3 章 draft 档 + parallel=2 ≈ 3 分钟）
+
+```bash
+cd /path/to/ai-novel
+
+# 3 章 × 3000 字 × draft 档（最快）：足够代表典型 baseline，
+# 且不消耗过多 5 小时 quota
+time python3 novel_cli.py write smoke_v014 \
+  --title "凌晨四点的便利店" \
+  --theme "一个冬夜，便利店收银员和一个意外闯入的陌生人" \
+  --genre 现实 --style 朴素 \
+  --words 9000 --chapters 3 \
+  --quality draft --parallel 2 --here --force --budget 5
+```
+
+预期：~3 分钟完成（draft 档 + parallel=2 是 base case）。
+
+##### 步骤 3：捕获 4 个核心指标
+
+```bash
+# 1. state 里的阶段/章数/累加 token/累计成本/起止时间
+cat smoke_v014/.novel/auto_state.json | python3 -m json.tool | grep -E '"(phase|chapters_done|chapters_total|cumulative_tokens|cumulative_cost_cny|started_at|updated_at)'
+
+# 2. book.md 字符数（实际产出）
+wc -c smoke_v014/book.md
+
+# 3. book.md 行数
+wc -l smoke_v014/book.md
+
+# 4. 实际耗时（time 命令输出的 real 字段）
+# 在步骤 2 输出末尾
+```
+
+##### 步骤 4：填进本节表格
+
+跑完后，把 4 个数字按下面模板填到「社区实测数据」表对应行（PR 加 1 行就行）：
+
+```markdown
+| 用户 | 时间 | 模型 | chapters | words | parallel | wall-clock | tokens | cost (CNY) | 备注 |
+|---|---|---|---|---|---|---|---|---|---|
+| @yourname | 2026-XX-XX | minimax-Text-01 | 3 | 9000 | 2 | 3m12s | 12345 | 0.42 | draft 档；撞配额 0 次 |
+```
+
+PR 直接改 DEVELOPER_GUIDE.md 这一段（一行添加）+ 在 PROGRESS.md §5.18 加引用。
+
+##### 步骤 5：可选 — 测试并发上限 / 配额等待
+
+```bash
+# 测并发上限
+for P in 1 2 4 8; do
+  time python3 novel_cli.py write smoke_v014_$P \
+    --title "..." --genre 现实 --words 9000 --chapters 3 \
+    --quality draft --parallel $P --here --force --budget 2
+done
+
+# 测撞 5 小时配额自动等
+# 预先消耗完 quota（用 draft 档连续跑到撞），然后：
+time python3 novel_cli.py write smoke_v014 \
+  --title "..." --words 30000 --chapters 10 \
+  --quality draft --parallel 2 --wait-on-quota --here --force
+# 看等多久才恢复 + 心跳是否合理
+```
+
+##### 期望产出
+
+每个 contributor 累计 5 行数据后，本节表格会给出真实数字而非「预期 50-65%」。  
+后续 v0.15+ 性能优化的 baseline 就是这表。
+
 #### 4.6.1 5 阶段状态机
 
 ```mermaid
