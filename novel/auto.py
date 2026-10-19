@@ -511,18 +511,22 @@ def _writing_phase(
     project: S.Project,
     client,  # LLMClient 或 TokenTracker
     state: AutoState,
+    only_chapters: set[int] | None = None,  # v0.16+：surgical rebuild 只写这些章
 ) -> None:
     state.phase = Phase.WRITING
     state.chapters_total = spec.target_chapters
     state.save(project.root)
-    console.print("[bold cyan]阶段 2/5：逐章生成[/bold cyan]")
+    if only_chapters:
+        console.print(f"[bold cyan]阶段 2/5：逐章生成（surgical：只重写 {sorted(only_chapters)}）[/bold cyan]")
+    else:
+        console.print("[bold cyan]阶段 2/5：逐章生成[/bold cyan]")
 
     # 注入 Web 控制信号检查
     _check_control_signal(project.root)
 
     # spec.parallel >= 2 时走并发（v0.13）
     if spec.parallel >= 2:
-        _writing_phase_parallel(spec, project, client, state)
+        _writing_phase_parallel(spec, project, client, state, only_chapters=only_chapters)
         return
 
     with Progress(
@@ -539,6 +543,14 @@ def _writing_phase(
             "准备中", total=spec.target_chapters, tokens_fmt="token 0 | ¥0.00",
         )
         for n in range(1, spec.target_chapters + 1):
+            # v0.16+ surgical：只重写 only_chapters 里的章；其他视为「保留」
+            if only_chapters is not None and n not in only_chapters:
+                # 已通过硬指标的章：保留旧文件，标 done 以让 state 完整
+                if not state.is_chapter_done(n):
+                    state.chapters_done.append(n)
+                    state.save(project.root)
+                progress.update(task_id, advance=1, description=f"第 {n} 章：跳过（surgical，已通过）")
+                continue
             if state.is_chapter_done(n):
                 progress.update(task_id, advance=1, description=f"第 {n} 章：跳过（已完成）")
                 continue
@@ -578,6 +590,7 @@ def _writing_phase_parallel(
     project: S.Project,
     client,
     state: AutoState,
+    only_chapters: set[int] | None = None,  # v0.16+ surgical
 ) -> None:
     """并发版 _writing_phase（v0.13）。
 
@@ -603,8 +616,14 @@ def _writing_phase_parallel(
 
     def worker(n: int) -> None:
         """单个 worker：检查 → 构建 ctx（含 prev_cache）→ 写 → state.save。"""
-        # 0. 跳过已完成
+        # 0. 跳过已完成 / 跳过 surgical 范围外
         with state_lock:
+            if only_chapters is not None and n not in only_chapters:
+                if not state.is_chapter_done(n):
+                    state.chapters_done.append(n)  # surgical 视为「已通过」
+                    state.save(project.root)
+                safe_progress(advance=1, description=f"第 {n} 章：跳过（surgical）")
+                return
             if state.is_chapter_done(n):
                 safe_progress(advance=1, description=f"第 {n} 章：跳过（已完成）")
                 return
@@ -795,6 +814,7 @@ def _polishing_phase(
     project: S.Project,
     client,  # LLMClient 或 TokenTracker
     state: AutoState,
+    only_chapters: set[int] | None = None,  # v0.16+ surgical
 ) -> None:
     """如果精修档以下 / 状态跳过了这一步。"""
     state.phase = Phase.POLISHING
@@ -807,6 +827,9 @@ def _polishing_phase(
 
     # 对未通过的章节，强制 polish 一次
     failed = state.chapters_failed
+    # v0.16+ surgical：只在 only_chapters 范围内 polish
+    if only_chapters is not None:
+        failed = sorted(set(failed) & only_chapters)
     if not failed:
         state.polished = True
         state.save(project.root)
@@ -843,11 +866,18 @@ def _consistency_phase(
     project: S.Project,
     client,  # LLMClient 或 TokenTracker
     state: AutoState,
+    only_chapters: set[int] | None = None,  # v0.16+ surgical（暂未传 lookback 内的过滤；保留接口）
 ) -> None:
     state.phase = Phase.CONSISTENCY
     state.save(project.root)
     console.print("[bold cyan]阶段 4/5：跨章一致性[/bold cyan]")
     try:
+        # v0.16+：only_chapters 时不重跑（v0.16+ 用 criteria 评估代替 consistency）
+        if only_chapters is not None:
+            console.print("  [dim]surgical 模式：跳过跨章一致性（criteria 评估已覆盖）[/dim]")
+            state.consistency_checked = True
+            state.save(project.root)
+            return
         G.check_consistency(project, client=client, lookback=20)
         console.print("  [green]一致性报告已保存到 consistency_report.md[/green]")
     except Exception as e:
@@ -936,6 +966,7 @@ def run_auto_novel(
     budget_cny: float = 0.0,
     plans_only: bool = False,
     skip_plans: bool = False,
+    only_chapters: list[int] | None = None,  # v0.16+ surgical rebuild
 ) -> Path:
     """一键全自动写小说主入口。
 
@@ -947,6 +978,8 @@ def run_auto_novel(
         budget_cny: 预算上限（CNY）。0 = 不限制。
         plans_only: 只跑规划阶段（生成 outline + 所有章纲），生成完后停。
         skip_plans: 跳过规划阶段，直接进入写作（用现有 outline/chapter_plans）。
+        only_chapters: v0.16+ 限定只重写这些章号（surgical rebuild）。
+                       None = 写所有章。用于 daemon 反馈循环节省 LLM quota。
 
     Returns:
         导出文件的绝对路径（book.md）。
@@ -997,18 +1030,23 @@ def run_auto_novel(
             f"  续跑模式: 已完成 {len(state.chapters_done)}/{state.chapters_total} 章"
         )
 
+    # v0.16+：把 list 转 set 一次
+    only_set = set(only_chapters) if only_chapters is not None else None
+
     try:
-        if state.phase.value in (Phase.PLANNING.value, "draft") and not skip_plans:
+        # v0.16+ surgical：only_chapters 时跳过 planning（已有 outline）
+        if (state.phase.value in (Phase.PLANNING.value, "draft") and not skip_plans
+                and only_set is None):
             _planning_phase(spec, project, client, state)
         if state.phase.value in (
             Phase.PLANNING.value, Phase.WRITING.value, "draft",
         ):
-            _writing_phase(spec, project, client, state)
+            _writing_phase(spec, project, client, state, only_chapters=only_set)
         if state.phase.value in (
             Phase.WRITING.value, Phase.POLISHING.value,
         ):
             if not plans_only:
-                _polishing_phase(spec, project, client, state)
+                _polishing_phase(spec, project, client, state, only_chapters=only_set)
         if state.phase.value in (
             Phase.POLISHING.value, Phase.CONSISTENCY.value,
         ):
@@ -1017,6 +1055,8 @@ def run_auto_novel(
         if state.phase.value in (
             Phase.CONSISTENCY.value, Phase.EXPORTING.value,
         ):
+            # v0.16+：surgical 时 consistency phase 已被 _consistency_phase 跳过
+            _consistency_phase(spec, project, client, state, only_chapters=only_set)
             out = _exporting_phase(spec, project, state)
     except KeyboardInterrupt:
         console.print("[yellow]用户中断。再次跑 `novel auto --resume` 可续跑。[/yellow]")

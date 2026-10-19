@@ -560,3 +560,33 @@ LLM 评估器返回 `top_priority_fixes`（如「修第 3 章、扩第 5 章」�
 
 ### 全套测试
 326 用例全过（297 → 326 +29 daemon）。
+
+## 5.19 v0.16 surgical rebuild（commit pending）
+
+### 背景
+v0.15 daemon 每轮跑全 6 阶段 → 3 章×3 轮 = 9 章 LLM 调用（约 4-6 小时）。
+大部分章本已通过硬指标，重写纯属浪费。
+
+### 实现
+- `AutoState` 加 `passed_chapters: list[int]` + `last_failed_chapters: list[int]`
+- `EvaluatorReport` 加 `failed_chapters: list[int]` 字段（LLM 输出补 + 解析）
+- `run_auto_novel(...)` 加 `only_chapters: list[int] | None` 参数
+  - 串行/并发 _writing_phase 跳过非 only_chapters 章，state 标 done
+  - _polishing_phase 限制失败章范围
+  - _consistency_phase surgical 时直接 skip（criteria 评估已覆盖）
+- `daemon._daemon_loop` 状态机：
+  - iter 1：only_chapters=None（全跑）
+  - iter ≥ 2：only_chapters = `state.passed_chapters 之外 failed_chapters`
+  - 每轮评估后累加 passed_chapters（永远不会重写已通过章）
+
+### 性能预期（30 章小说）
+- v0.15：30 章 × 3 轮 = 90 章 LLM 调用 + 3 × 6 阶段
+- v0.16：30 + 5 + 2 = 37 章 LLM 调用（第 1 轮全跑 + 第 2 轮重写 5 章 + 第 3 轮重写 2 章）
+- 节省：**~60% quota**
+
+### 测试（10 用例）
+- `TestFailedChaptersField` (5)：field 默认空 / to_dict 含 / 解析乱序 / 非 int 容错 / 缺字段兜底
+- `TestRunAutoNovelOnlyChapters` (2)：None 写全章 / [2] surgical
+- `TestDaemonSurgicalLoop` (3)：第 1 轮 None / 第 2 轮 surgical / 累加 passed
+
+全套 336 用例全过（326 + 10）。

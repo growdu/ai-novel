@@ -147,6 +147,9 @@ class AutoState:
     iteration_count: int = 0                  # 跑了几轮（6 阶段 + criteria 检查）
     last_criteria_report: str = ""           # 最近一次 criteria 评估的原始 LLM 输出
     last_iter_passed: bool = False           # 最近一轮是否全 pass
+    # v0.16+ surgical rebuild 字段
+    passed_chapters: list[int] = field(default_factory=list)   # 累计通过硬指标的章（surgical 跳过用）
+    last_failed_chapters: list[int] = field(default_factory=list)  # 最近一轮未通过的章（下轮重写目标）
 
     # ---- 序列化 ----
     def to_dict(self) -> dict:

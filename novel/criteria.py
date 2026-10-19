@@ -52,6 +52,7 @@ class EvaluatorReport:
     all_passed: bool
     criteria: list[CriterionResult] = field(default_factory=list)
     top_priority_fixes: list[str] = field(default_factory=list)
+    failed_chapters: list[int] = field(default_factory=list)  # v0.16+ surgical rebuild
     raw_text: str = ""   # 原始 LLM 输出（debug 用）
 
     def to_dict(self) -> dict:
@@ -64,6 +65,7 @@ class EvaluatorReport:
                 for c in self.criteria
             ],
             "top_priority_fixes": list(self.top_priority_fixes),
+            "failed_chapters": list(self.failed_chapters),
         }
 
 
@@ -149,11 +151,22 @@ def _parse_report(parsed: dict) -> EvaluatorReport:
     fixes = parsed.get("top_priority_fixes", []) or []
     if isinstance(fixes, str):
         fixes = [fixes]
+    # v0.16+：failed_chapters 解析（LLM 输出如 [3, 7, 12]）
+    raw_failed = parsed.get("failed_chapters", []) or []
+    failed_chapters: list[int] = []
+    if isinstance(raw_failed, list):
+        for x in raw_failed:
+            try:
+                failed_chapters.append(int(x))
+            except (TypeError, ValueError):
+                continue
+    failed_chapters = sorted(set(failed_chapters))
     return EvaluatorReport(
         summary=summary,
         all_passed=all_passed,
         criteria=criteria,
         top_priority_fixes=[str(f) for f in fixes],
+        failed_chapters=failed_chapters,
     )
 
 

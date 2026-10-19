@@ -186,9 +186,27 @@ def _daemon_loop(
             feedback = format_feedback_for_next_iter(last_report)
             current_spec = replace(spec, extra=feedback)
 
+        # v0.16+ surgical：第 1 轮跑全本，之后只重写未通过章
+        only_chapters: list[int] | None = None
+        if last_report is not None and not last_report.all_passed and last_report.failed_chapters:
+            # 取上轮 failed + 之前 passed（确保 surgical 范围精确）
+            all_chs = set(range(1, spec.target_chapters + 1))
+            already_passed = set(state.passed_chapters)
+            to_rewrite = set(last_report.failed_chapters) - already_passed
+            if to_rewrite:
+                only_chapters = sorted(to_rewrite)
+                console.print(
+                    f"[cyan]surgical 重写：第 {only_chapters} 章"
+                    f"（其余 {len(all_chs) - len(to_rewrite)} 章已通过，保留）[/cyan]"
+                )
+
         console.print(f"\n[bold]═══ 第 {iter_no} 轮迭代 ═══[/bold]")
         try:
-            out = run_auto_novel(current_spec, project_dir, cfg=cfg, budget_cny=cost_budget or spec.budget_cny)
+            out = run_auto_novel(
+                current_spec, project_dir, cfg=cfg,
+                budget_cny=cost_budget or spec.budget_cny,
+                only_chapters=only_chapters,
+            )
         except Exception as e:
             console.print(f"[red]本轮 run_auto_novel 失败：{e}[/red]")
             state.last_error = str(e)
@@ -243,6 +261,17 @@ def _daemon_loop(
 
         state.last_criteria_report = report.raw_text
         state.last_iter_passed = report.all_passed
+        state.last_failed_chapters = list(report.failed_chapters)
+        # v0.16+ surgical：累加 passed_chapters（一次跑过的章不再重写）
+        if report.all_passed:
+            state.passed_chapters = sorted(
+                set(state.passed_chapters) | set(range(1, spec.target_chapters + 1))
+            )
+        else:
+            # 本轮通过 = all - failed；与历史 passed 取并集
+            all_chs = set(range(1, spec.target_chapters + 1))
+            iter_passed = all_chs - set(report.failed_chapters)
+            state.passed_chapters = sorted(set(state.passed_chapters) | iter_passed)
         state.save(project_dir)
 
         # 打印评估结果

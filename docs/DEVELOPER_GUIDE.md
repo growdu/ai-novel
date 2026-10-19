@@ -2399,3 +2399,63 @@ CLI 端 `novel daemon unit --user ubuntu --project /path > novel.service`，用�
 - [PROGRESS.md](../PROGRESS.md) · 演进日志
 - [CHANGELOG.md](../CHANGELOG.md) · 版本日志
 - [CONTRIBUTING.md](../CONTRIBUTING.md) · 贡献指南
+---
+
+## 12. v0.16 surgical rebuild 实现
+
+### 12.1 问题
+v0.15 daemon 每轮跑全 6 阶段 → 30 章 × 3 轮 = 90 章 LLM 调用（~6h）。  
+绝大部分章在第 1 轮评估后就已通过 criteria → 后续重写纯属浪费 quota。
+
+### 12.2 设计
+- **每轮 LLM 评估返 failed_chapters**：评估器 `prompts/daemon_criteria.md` 多了一条硬规则：「必须输出 `failed_chapters` 数组」，`_parse_report` 提取并去重排序。
+- **`AutoState.passed_chapters`**：累计通过章（永远不会再重写）。
+- **`run_auto_novel(only_chapters: list[int])` 参数**：在 _writing_phase 串/并发两版本都加 `if only_chapters and n not in only_chapters: state.chapters_done.append(n); continue`。
+- **daemon 状态机改**：
+
+```
+iter 1:  only_chapters = None  → 全跑
+iter ≥ 2: only_chapters = sorted(
+            (failed_chapters 报告) - (state.passed_chapters 已通过)
+         )
+```
+
+### 12.3 修改文件
+- `novel/auto_state.py`：+passed_chapters / +last_failed_chapters 字段
+- `novel/criteria.py`：`EvaluatorReport.failed_chapters` + `_parse_report` 提取
+- `prompts/daemon_criteria.md`：第 7 条硬规则（必须输出 failed_chapters）
+- `novel/auto.py`：
+  - `_writing_phase(only_chapters=None)` 串行版：跳过非 only_chapters 章
+  - `_writing_phase_parallel(only_chapters=None)` 并发版：worker 跳过非 only_chapters
+  - `_polishing_phase(only_chapters=None)`：限制 failed 范围
+  - `_consistency_phase(only_chapters=None)`：surgical 时 skip（criteria 已覆盖）
+  - `run_auto_novel(only_chapters=None)` 顶层加参数 + dispatch
+- `novel/daemon.py`：第 ≥2 轮 only_chapters 计算 + 累加 passed_chapters
+
+### 12.4 性能对比（30 章 / 3 轮 / 假设 5 → 2 → 0 fail）
+
+| 模式 | iter 1 | iter 2 | iter 3 | 合计 |
+|---|---|---|---|---|
+| v0.15 全跑 | 30 章 | 30 章 | 30 章 | **90** |
+| v0.16 surgical | 30 章 | 5 章 | 2 章 | **37** |
+| 节省 | | | | **59%** |
+
+60 章 / 12 fail / 3 轮：180 → 71（**60%**）
+100 章 / 16 fail / 3 轮：300 → 116（**61%**）
+
+### 12.5 测试覆盖（10 用例）
+- `TestFailedChaptersField` (5)：default / to_dict / 解析乱序 / 非 int / 缺字段
+- `TestRunAutoNovelOnlyChapters` (2)：None 全写 / [2] surgical
+- `TestDaemonSurgicalLoop` (3)：第 1 轮 None / 第 2 轮 surgical / passed 累加
+
+### 12.6 已知 trade-off
+- **surgical 跳过 planning**：第 2 轮起不再调用 `_planning_phase` → 节省一笔 LLM 调用。代价：outline 在第 1 轮已写死，第 2/3 轮不会改进大纲本身（如果大纲本身有问题）。
+- **跨章一致性也 skip**：surgical 模式下 `_consistency_phase` 直接跳过（criteria 评估本身已跨章读）。如果用户特别想要传统一致性报告，可通过 `novel check` 手动跑。
+- **feedback 注入到全 6 阶段还是 surgical？** 当前 surgical 模式下，feedback（spec.extra）仍然注入到 `_build_chapter_ctx` → LLM 写只重写的 few chapters 时能看到反馈。这正是用户期望的「按反馈改差的那几章」。
+
+### 12.7 兼容性
+零行为变化（默认 daemon run 即开 surgical）。  
+用户感知：
+- 控制台日志第 1 轮「全跑 30 章」；第 2 轮「surgical 重写 [5, 12]」
+- 状态查看：`novel daemon status` 新增 `passed` / `failed` 列
+- 强制关闭：跑 `novel auto` 不经 daemon 主循环（每轮都全跑）

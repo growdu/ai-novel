@@ -409,3 +409,45 @@ novel daemon unit --user ubuntu > /etc/systemd/system/novel.service
 - CHANGELOG [0.15.0]
 - USER_MANUAL §4.13 novel daemon 运维部署
 - DEVELOPER_GUIDE §4.14 daemon 实现 + state 字段
+
+---
+
+## [0.16.0] - surgical rebuild
+
+### 背景
+v0.15 daemon 每轮跑全 6 阶段 → 30 章×3 轮 = 90 章 LLM 调用（~6h）。大部分章本已通过硬指标，重写纯属浪费。
+
+### 新增
+- **`AutoState` 字段**：
+  - `passed_chapters: list[int]` — 累计通过硬指标的章（surgical 跳过用）
+  - `last_failed_chapters: list[int]` — 最近一轮未通过章
+- **`EvaluatorReport` 字段**：
+  - `failed_chapters: list[int]` — LLM 评估时输出哪些章没过；daemon 用此驱动 surgical
+- **`run_auto_novel(only_chapters: list[int])` 参数**：
+  - 串行 / 并发 _writing_phase 都按此过滤；非目标章视为「已通过」并标 done
+  - _polishing_phase 限制只 polish 未通过章
+  - _consistency_phase surgical 时直接 skip（criteria 评估已覆盖）
+- **`daemon._daemon_loop` 状态机改**：
+  - iter 1：only_chapters=None（全跑）
+  - iter ≥ 2：only_chapters = failed_chapters \ passed_chapters
+  - 每轮累加 passed_chapters（已通过章永不再写）
+
+### CLI
+无需新 flag。`novel daemon run` 默认开 surgical。`--force` 重置 state（含 passed_chapters）。
+
+### 性能预期
+| 章数 | 轮数 | failed 假设 | v0.15 调用 | v0.16 调用 | 节省 |
+|---|---|---|---|---|---|
+| 30 | 3 | 5 → 2 → 0 | 90 | 37 | 59% |
+| 60 | 3 | 8 → 3 → 0 | 180 | 71 | 60% |
+| 100 | 3 | 12 → 4 → 0 | 300 | 116 | 61% |
+
+### 测试
+- 新增 `tests/test_daemon_surgical.py`：10 用例
+  - 解析 5：乱序排序 / 非 int 容错 / 缺字段兜底
+  - run_auto_novel 2：None 全写 / [2] surgical
+  - daemon 状态机 3：第 1 轮 None / 第 2 轮 surgical / passed 累加
+- 全套 **336 用例**全过（326 + 10）
+
+### 兼容性
+零行为变化：用户不感知；daemon 主循环内部 transparent 升级。

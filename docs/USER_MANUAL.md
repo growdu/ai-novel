@@ -1128,3 +1128,27 @@ A：`novel serve` + Web 仪表盘看 `state.iteration_count` 实时更新；或 
 
 **Q：daemon 和 `novel serve` 什么关系？**
 A：`novel daemon run --serve` 会同时起 Web 仪表盘后台线程；`novel serve` 单独用则只跑仪表盘（不写小说）。
+
+#### surgical rebuild（v0.16+）
+
+v0.16+ daemon 默认开 **surgical rebuild**：第 1 轮跑完全书，**后续轮次只重写未通过 criteria 的章节**。已通过的章不会被重写（即使 LLM 温度非 0，重写也未必更好）。
+
+效果：
+- 第 1 轮：30 章全跑，3 章 LLM 调用评估 → 假设返 failed=[5, 12]
+- 第 2 轮：只重写第 5 / 12 章，其他 28 章保留
+- 第 3 轮：假设又返 failed=[12]，只重写 1 章
+
+性能对比（30 章 / 3 轮 / 假设 5 → 2 → 0 fail）：
+
+| 模式 | LLM 调用次数 | 节省 |
+|---|---|---|
+| v0.15 全 6 阶段 | 30 × 3 = 90 章 | — |
+| v0.16 surgical | 30 + 5 + 2 = 37 章 | 59% |
+
+实现细节（详见 DEVELOPER_GUIDE §11.12）：
+- `state.passed_chapters` 累计通过章
+- `evaluate_via_llm` 输出 `failed_chapters` 字段
+- daemon 第 ≥2 轮 `only_chapters = failed \ passed`，传给 `run_auto_novel`
+- `_writing_phase` 跳过非 only_chapters 章，state 标 done
+
+如果想关 surgical 走全重写：`--max-iterations 1`（只跑 1 轮）或 `novel auto` 不用 daemon。
