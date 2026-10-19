@@ -1038,3 +1038,93 @@ webnovel-styles   # 9 个爽感文风
 - [PROGRESS.md](../PROGRESS.md) · 演进日志
 - [CHANGELOG.md](../CHANGELOG.md) · 版本变更日志
 - [CONTRIBUTING.md](../CONTRIBUTING.md) · 贡献指南
+### 4.13 后台长跑：`novel daemon`（v0.15+）
+
+单次 `novel write` 跑完只保证「能写出来」，未必满足你的所有要求。`novel daemon` 是**后台长跑循环**：每轮跑完 6 阶段，让 LLM 评一遍你写的硬指标，不达标就把问题反馈给下一轮再跑。
+
+#### 写一份硬指标（`quality_criteria.md`）
+
+```markdown
+# 硬指标
+- 第三章不能出现内心独白
+- 全书 AI 味指数均值 < 40
+- 5 个核心人物姓名不能有别名
+- 每章 ≥ 2500 字
+- 情节无前后矛盾
+- 主角在最后一章必须明确选择
+```
+
+每行一条，支持 `- text` / `* text` / `1. text` 三种列表标记。空行 / 标题行 / 代码块内的行会被忽略。
+
+#### 跑 daemon
+
+```bash
+# 标准用法：3 章 + 硬指标，最多 3 轮
+novel daemon run my_novel --criteria ./quality_criteria.md
+
+# 长跑大项目：开 Web 仪表盘后台监控
+novel daemon run my_novel --criteria ./criteria.md \
+  --max-iterations 5 --cost-budget 30 --serve
+
+# 重置（从头开始，重新评估）
+novel daemon run my_novel --criteria ./criteria.md --force
+```
+
+#### 终止条件（OR，任一满足即退）
+
+- LLM 评估后所有 criteria 全 pass（达到要求）
+- `iteration_count >= max_iterations`（默认 3）
+- `cumulative_cost_cny >= cost_budget`（默认不限）
+- `elapsed >= max_time_seconds`（默认不限）
+- 用户写 `.novel/stop_daemon` 文件（`novel daemon stop` 一键写）
+- SIGINT / SIGTERM（Ctrl-C / systemd stop）
+
+#### 状态查看
+
+```bash
+# 终端看
+novel daemon status
+
+# 看具体某轮评估了什么
+cat .novel/auto_state.json | python3 -m json.tool | grep last_criteria_report
+```
+
+#### 优雅停止
+
+```bash
+# 终端：写 .novel/stop_daemon，下一轮 check 时退出
+novel daemon stop
+
+# 立刻退出：Ctrl-C（state 已保存）
+```
+
+#### 部署为 systemd 服务（生产用法）
+
+```bash
+# 生成 unit file
+novel daemon unit --user ubuntu --project /home/ubuntu/my_novel > novel.service
+
+# root 权限安装
+sudo cp novel.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now novel-my_novel.service
+sudo journalctl -u novel-my_novel.service -f
+```
+
+#### 反馈注入机制
+
+每轮跑完 6 阶段 → LLM 评估 `quality_criteria.md` → 拿 `top_priority_fixes`（如「修第 3 章、扩第 5 章」）→ 反馈格式化成文本，注入到下一轮每章的 prompt 的「## 作者额外要求」段 → LLM 看到问题后改进。
+
+#### FAQ
+
+**Q：daemon 跑完后我应该看哪里？**
+A：`.novel/auto_state.json` 里 `iteration_count` / `last_iter_passed` / `last_criteria_report` 三个字段全 pass 即可。
+
+**Q：`--max-iterations 3` 全 fail 怎么办？**
+A：3 轮还没达标说明 criteria 描述可能太严或 LLM 短时间改不了。作者可调 criteria 后重跑（`--force`），或降低质量目标（用 `standard` 档替代 `premium`）。
+
+**Q：怎么知道 daemon 在跑？**
+A：`novel serve` + Web 仪表盘看 `state.iteration_count` 实时更新；或 `ps aux | grep daemon`。
+
+**Q：daemon 和 `novel serve` 什么关系？**
+A：`novel daemon run --serve` 会同时起 Web 仪表盘后台线程；`novel serve` 单独用则只跑仪表盘（不写小说）。

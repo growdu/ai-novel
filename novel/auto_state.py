@@ -84,6 +84,10 @@ class AutoSpec:
     samples_dir: Optional[str] = None  # 自定义风格样本路径
     wait_on_quota: bool = True          # 撞配额时自动等到重置（v0.14）
     max_wait_seconds: int = 21600      # 撞配额单次最多等 6 小时（v0.14）
+    daemon_criteria_path: str = ""       # 用户硬指标文件路径（v0.15 daemon）
+    max_iterations: int = 3             # daemon 最多迭代轮数（v0.15）
+    max_time_seconds: int = 0           # daemon 总时间上限 0=无限（v0.15）
+    extra: str = ""                     # 注入到 prompts 的额外文本（v0.15 daemon 用反馈）
 
     def __post_init__(self):
         if self.target_chapters <= 0:
@@ -139,6 +143,10 @@ class AutoState:
     polished: bool = False
     consistency_checked: bool = False
     exported_path: str = ""
+    # v0.15+ daemon 字段
+    iteration_count: int = 0                  # 跑了几轮（6 阶段 + criteria 检查）
+    last_criteria_report: str = ""           # 最近一次 criteria 评估的原始 LLM 输出
+    last_iter_passed: bool = False           # 最近一轮是否全 pass
 
     # ---- 序列化 ----
     def to_dict(self) -> dict:

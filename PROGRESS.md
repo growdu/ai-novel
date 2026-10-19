@@ -492,3 +492,71 @@ novel write / novel auto / novel webnovel-pack --auto:
   - kwarg 路由：`wait_on_quota=False` → `_PASS_THROUGH` 哨兵
   - CLI：`--wait-on-quota/--no-wait/--max-wait-seconds` 都出现在 help
 - 全套 254 用例全过
+
+## 5.18 v0.15 novel daemon 后台长跑（commit pending）
+
+### 背景
+v0.14 解决了「撞 minimax 配额怎么办」（自动等），但没解决「**如何确保最终交付质量**」。
+一本长篇要满足作者所有要求，**单跑一次往往不够**：
+- 第 1 轮 LLM 不知道有哪些硬指标
+- 第 1 轮跑完 6 阶段只是「能写」，未必「写好」
+- 真正的「达标」需要在跑完后让 LLM 评一遍 → 反馈 → 重写
+
+### 实现
+新增 `novel daemon` 长跑循环：
+
+```
+iter 1: 跑 6 阶段 → 生成 book.md
+       → 调 evaluate_via_llm() 对照 quality_criteria.md
+       → 未通过：记录 top_priority_fixes
+iter 2: 跑 6 阶段（inject spec.extra = 上一轮反馈）
+       → 再评估 ...
+iter N: 全 pass OR max_iterations / cost / time 到限 → 退出
+```
+
+### 模块切分
+- `novel/criteria.py`（~200 行）— 解析 `quality_criteria.md` + LLM 评估器
+- `prompts/daemon_criteria.md`（~40 行）— 评估 LLM prompt 模板，输出 JSON `{summary, all_passed, criteria:[{id,text,passed,evidence,suggestion}], top_priority_fixes}`
+- `novel/daemon.py`（~280 行）— 主循环 + 停止条件判断 + 信号处理 + systemd unit 渲染
+- `novel/commands/_daemon.py`（~150 行）— 4 子命令：run / status / stop / unit
+- `novel/auto_state.py`（+~10 行）— `iteration_count` / `last_criteria_report` / `last_iter_passed` 字段
+- `novel/auto.py`（+~5 行）— `_build_chapter_ctx` 新增 `extra` 注入参数
+
+### 终止条件（OR）
+- `iteration_count >= max_iterations`
+- `cumulative_cost_cny >= cost_budget`
+- `elapsed >= max_time_seconds`
+- `.novel/stop_daemon` 文件存在（用户从 web 仪表盘 / CLI 触发）
+- SIGINT / SIGTERM（Ctrl-C / systemd stop）
+- `evaluate_via_llm().all_passed == True`
+
+### CLI（4 子命令）
+```bash
+novel daemon run my_novel \
+  --criteria ./quality_criteria.md \
+  --max-iterations 3 --cost-budget 30 --max-time 86400 --serve
+
+novel daemon status         # 看 iteration / cost / 上轮评估
+novel daemon stop           # 写 .novel/stop_daemon
+novel daemon unit --user ubuntu > novel.service  # 生成 systemd unit
+```
+
+### 反馈注入
+LLM 评估器返回 `top_priority_fixes`（如「修第 3 章、扩第 5 章」）→ 下一轮 `spec.extra` 注入到 `build_chapter_messages` 的「## 作者额外要求」段，让 LLM 看到上一轮问题并改进。
+
+### 测试（tests/test_daemon.py 29 用例）
+- criteria 解析（list 标记 / code block / header 跳过 / 空文件）
+- JSON 提取（`{...}` 块 / ```json 块 / 无 JSON 兜底）
+- feedback 格式（all pass 空 / 失败列表每条 + [id] 前缀 + top_priority 列出）
+- 终止条件 6 路径（max_iter / cost / time / stop file / 无 stop / 多种）
+- systemd unit 渲染（project path 替换 / extra_args 透传）
+- 端到端：mock run_auto_novel + evaluate_via_llm
+  - 无 criteria → 1 轮退
+  - 全 pass → 立即退
+  - 3 轮前 fail 后 pass → 3 轮
+  - max_iter=2 全 fail → 2 轮后 stop
+  - stop_daemon 写后第 2 轮起退
+- CLI：4 子命令 help / 退出码 / 文件创建
+
+### 全套测试
+326 用例全过（297 → 326 +29 daemon）。

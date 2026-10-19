@@ -292,8 +292,11 @@ def _planning_phase(spec: _AutoSpec, project: S.Project, client, state: AutoStat
 # 阶段 2：逐章生成 + 质量门控
 # ---------------------------------------------------------------------------
 
-def _build_chapter_ctx(project: S.Project, n: int) -> dict:
-    """构造 ChapterContext dict 喂给 generator。"""
+def _build_chapter_ctx(project: S.Project, n: int, extra: str = "") -> dict:
+    """构造 ChapterContext dict 喂给 generator。
+
+    extra: 注入到 LLM prompt 的「作者额外要求」段（v0.15 daemon 用反馈）。
+    """
     outline_text = project.outline_path.read_text(encoding="utf-8") if project.outline_path.exists() else ""
     characters_text = project.characters_path.read_text(encoding="utf-8") if project.characters_path.exists() else ""
     style = project.style_path.read_text(encoding="utf-8") if project.style_path.exists() else ""
@@ -318,6 +321,7 @@ def _build_chapter_ctx(project: S.Project, n: int) -> dict:
         "arc": (project.arcs_dir / "_overview.md").read_text(encoding="utf-8") if (project.arcs_dir / "_overview.md").exists() else "",
         "rolling_summary": project.rolling_summary_path.read_text(encoding="utf-8") if project.rolling_summary_path.exists() else "",
         "style_samples": style_samples,
+        "extra": extra,  # v0.15 daemon feedback
     }
 
 
@@ -332,7 +336,7 @@ def _write_one_chapter(
 ) -> ChapterResult:
     """单章：generate → validate → retry → polish → save。失败兜底为草稿。"""
     start = time.time()
-    ctx = _build_chapter_ctx(project, n)
+    ctx = _build_chapter_ctx(project, n, extra=getattr(spec, "extra", "") or "")
     req = G.ChapterRequest(chapter_no=n, target_words=spec.per_chapter_words)
     last_err = ""
     last_result = None
@@ -612,7 +616,7 @@ def _writing_phase_parallel(
             return  # 被信号终止，安静退出
 
         # 2. 构造 ctx（含 cache 覆盖 prev_tail）
-        ctx = _build_chapter_ctx(project, n)
+        ctx = _build_chapter_ctx(project, n, extra=getattr(spec, "extra", "") or "")
         with prev_cache_lock:
             prev_content = prev_cache.get(n - 1)
         if prev_content is not None:
@@ -687,7 +691,7 @@ def _write_one_chapter_locked(
     行为与 _write_one_chapter 一致；只把 progress 替换为加锁包装。
     """
     start = time.time()
-    ctx = _build_chapter_ctx(project, n)  # 重建一次；上一层可能再覆盖一次
+    ctx = _build_chapter_ctx(project, n, extra=getattr(spec, "extra", "") or "")  # 重建一次；上一层可能再覆盖一次
     req = G.ChapterRequest(chapter_no=n, target_words=spec.per_chapter_words)
 
     last_err = ""

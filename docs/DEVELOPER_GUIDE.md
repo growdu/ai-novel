@@ -2220,6 +2220,174 @@ DRY_RUN 下 LLM 直接返回占位字符串，所有并发开销体现在 11 个
 
 ---
 
+## 11. v0.15 novel daemon 后台长跑实现
+
+### 11.1 设计动机
+v0.14 解决「撞配额怎么办」（自动等）。v0.15 解决「**如何确保最终交付质量**」。
+单跑 6 阶段只能「能写出来」，未必「写好」。作者的真实诉求是「**满足我的所有硬指标**」，这需要**循环跑 + LLM 评估 + 反馈注入**。
+
+### 11.2 模块切分
+```
+novel/
+├── criteria.py            # parse quality_criteria.md + LLM 评估器
+├── daemon.py              # _daemon_loop 主循环 + 停止条件 + systemd unit 渲染
+├── auto_state.py          # +iteration_count / +last_criteria_report / +last_iter_passed
+├── auto.py                # +_build_chapter_ctx(extra=spec.extra)  # 反馈注入
+├── commands/_daemon.py    # 4 子命令 run / status / stop / unit
+prompts/
+└── daemon_criteria.md     # LLM 评估器 prompt 模板（输出 JSON）
+```
+
+### 11.3 主循环伪代码
+```python
+def _daemon_loop(spec, project_dir, cfg, max_iterations, cost_budget, max_time):
+    state = AutoState.load(project_dir) or AutoState(spec=spec.__dict__)
+    state.save(project_dir)
+    criteria_lines = load_criteria(spec.daemon_criteria_path)
+    last_report = None
+    
+    while True:
+        iter_no = state.iteration_count + 1
+        # 注入上轮反馈
+        current_spec = spec
+        if last_report and not last_report.all_passed:
+            current_spec = replace(spec, extra=format_feedback_for_next_iter(last_report))
+        
+        # 1. 跑 6 阶段
+        out = run_auto_novel(current_spec, project_dir, cfg=cfg)
+        state = AutoState.load(project_dir)
+        state.iteration_count = iter_no
+        state.save()
+        
+        # 2. 检查停止条件（在评估前）
+        if should_stop(...): return state
+        
+        # 3. 评估 criteria
+        report = evaluate_via_llm(criteria_lines, _read_all_chapters(project_dir), ...)
+        state.last_criteria_report = report.raw_text
+        state.last_iter_passed = report.all_passed
+        state.save()
+        
+        if report.all_passed: return state  # 全 pass 退出
+        
+        # 4. 再检查停止（在评估后）
+        if should_stop(...): return state
+        
+        last_report = report
+```
+
+### 11.4 6 重停止条件（OR）
+
+| 条件 | 触发 | 含义 |
+|---|---|---|
+| `iteration_count >= max_iterations` | 用户控制 | 默认 3 轮 |
+| `cumulative_cost_cny >= cost_budget` | 财务上限 | 默认不限 |
+| `elapsed >= max_time_seconds` | 时间上限 | 默认不限 |
+| `.novel/stop_daemon` 文件存在 | 用户从 CLI / web 主动停 | `novel daemon stop` 一键写 |
+| `SIGINT / SIGTERM` | 进程被中断 | 信号处理器优雅退出 |
+| `evaluate_via_llm().all_passed == True` | 全部硬指标满足 | 任务完成 |
+
+### 11.5 反馈注入机制
+```
+iter 1: 跑 6 阶段
+       → 评估 LLM 读 完整书 + criteria.md
+       → 返 {criteria: [{passed: false, evidence: "...", suggestion: "..."}, ...],
+              top_priority_fixes: ["修第3章", "扩第5章"]}
+
+iter 2: 跑 6 阶段（spec.extra = 上轮反馈的紧凑文本）
+       → build_chapter_messages 把 spec.extra 注入到「## 作者额外要求」段
+       → LLM 看到问题 → 改进
+
+iter 3: 同上
+```
+
+`format_feedback_for_next_iter` 输出：
+```
+上轮评估未通过。2/3 fail
+- [1] 第3章不能X → 证据：第3章第2段含X → 建议：删X
+- [3] 第5章≥2500字 → 证据：实际1800 → 建议：扩展
+
+优先修复：
+  * 修第3章
+  * 扩第5章
+```
+
+### 11.6 AutoSpec / AutoState 字段
+
+```python
+# AutoSpec
+daemon_criteria_path: str = ""     # quality_criteria.md 路径
+max_iterations: int = 3            # 最多迭代轮数
+max_time_seconds: int = 0          # 总时间上限 0=无限
+extra: str = ""                    # 注入到下轮 prompts 的反馈（per-iter 覆盖）
+
+# AutoState
+iteration_count: int = 0            # 已跑几轮
+last_criteria_report: str = ""     # 最近评估的原始 LLM 输出
+last_iter_passed: bool = False      # 最近一轮是否全 pass
+```
+
+### 11.7 systemd unit 渲染
+```python
+SYSTEMD_UNIT_TEMPLATE = """[Unit]
+Description=novel-writer daemon: {project_dir}
+After=network-online.target
+
+[Service]
+Type=simple
+User={user}
+WorkingDirectory={cwd}
+ExecStart={python} {cli_py} daemon run {project_arg} --here {extra_args}
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+"""
+```
+
+CLI 端 `novel daemon unit --user ubuntu --project /path > novel.service`，用户 `tee` 到 `/etc/systemd/system/`。
+
+### 11.8 测试覆盖（29 用例）
+
+| 测试类 | 用例数 | 关注点 |
+|---|---|---|
+| `TestLoadCriteria` | 7 | list 标记 / 标题跳过 / code block / 备选 / 空文件 / 不存在 |
+| `TestExtractJsonBlock` | 3 | ```json / 散文 / 无 JSON 兜底 |
+| `TestFormatFeedback` | 2 | all pass 空 / 失败列出 + [id] 前缀 + top_priority |
+| `TestCheckShouldStop` | 6 | max_iter / cost / time / stop_file / 无 stop / 默认 unlimited |
+| `TestSystemdUnit` | 2 | project path 替换 / extra_args 透传 |
+| `TestDaemonLoopEndToEnd` | 5 | 无 criteria / 全 pass / 多次后 pass / max_iter / stop file |
+| `TestDaemonCLI` | 4 | daemon help / unit 输出 / stop 写文件 / status 错误处理 |
+
+### 11.9 部署模式对比
+
+| 模式 | 命令 | 适合 |
+|---|---|---|
+| **前台** | `novel daemon run` | 开发 / 短任务 / 单次试验 |
+| **前台 + Web** | `novel daemon run --serve` | 半天能写完的中型项目 |
+| **后台 systemd** | `novel daemon unit` → systemctl | 生产 / 跨天 / 多用户 |
+| **tmux / screen** | `tmux new -s daemon 'novel daemon run'` | 临时远程会话 |
+
+### 11.10 已知风险
+
+1. **每轮重跑全 6 阶段**：v0.15 设计是"重跑"而非"修补"。3 章×3 轮 = 9 章的 LLM 调用。极贵。
+   - 后续 v0.16 优化：只对未通过 criteria 的章节重写（partial re-run）
+2. **criteria 评估本身有 quota 成本**：每轮多 1 次 LLM 调用评估（~1K tokens）。3 轮 +3K tokens。
+3. **LLM 评估本身会"误判"**：评估是 LLM，不是形式验证。3 轮内未达标可能是 criteria 太严或评估不够准确。
+4. **concurrent run + daemon**：当前 daemon 串行跑 6 阶段（每次一个 run_auto_novel）。如果想 daemon 内部并发章节生成，可以传 `parallel > 1` 到 spec。
+
+### 11.11 与现有架构的接续
+- 复用 `run_auto_novel` 完整 6 阶段（novel/auto.py）
+- 复用 `_call_with_quota_retry` → 撞 minimax 配额自动等（v0.14）
+- 复用 `novel serve` Web 仪表盘 → daemon 状态实时可见
+- 复用 `auto_state.json` 持久化 → 续跑 / 中断恢复（v0.12）
+- 复用 `_build_chapter_ctx` → 注入 spec.extra 作为 ctx["extra"]（v0.15）
+
+---
+
+## 相关文档
+
 ## 相关文档
 
 ## 相关文档

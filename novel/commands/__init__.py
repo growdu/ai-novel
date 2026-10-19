@@ -22,6 +22,7 @@ import typer
 from . import (
     _adapt,
     _config,
+    _daemon,
     _diagnose,
     _init,
     _output,
@@ -47,6 +48,7 @@ def register_all(app: typer.Typer) -> None:
     _state.register(app)
     _project.register(app)
     _diagnose.register(app)
+    _daemon.register(app)
     _adapt.register(app)
     _output.register(app)
 

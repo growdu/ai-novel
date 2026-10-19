@@ -334,3 +334,78 @@ minimax / OpenAI 等 LLM 服务有 quota 限额（minimax 5 小时 + 周用量�
 - 🔧 内部重构
 - 🧪 测试
 - ⚠️ 废弃警告
+---
+
+## [0.15.0] - novel daemon 后台长跑
+
+### 背景
+单跑 6 阶段只能「写出来」，未必「达标」。真实长篇要确保所有硬指标满足（字数 / 风格 / 情节一致性 / 角色一致等），需要**循环跑 + LLM 评估 + 反馈注入**。
+
+### 新增
+- **`novel/criteria.py`**（~200 行）：
+  - `load_criteria(path)` — 解析用户 `quality_criteria.md`（支持 list / code block / 标题 跳过）
+  - `evaluate_via_llm(criteria_lines, full_text, prev_feedback)` — LLM 评估器，输出 JSON
+  - `format_feedback_for_next_iter(report)` — 转成下轮 prompt 注入
+- **`prompts/daemon_criteria.md`**：评估 prompt 模板，输出 `{summary, all_passed, criteria:[{id,text,passed,evidence,suggestion}], top_priority_fixes}`
+- **`novel/daemon.py`**（~280 行）：
+  - `_daemon_loop(spec, project_dir, cfg, max_iterations, cost_budget, max_time)` — 主循环
+  - `_check_should_stop` — 6 重停止条件（max_iter / cost / time / stop file / signal / 评估全 pass）
+  - `is_stop_requested(project_dir)` — `.novel/stop_daemon` 文件检测
+  - `render_systemd_unit(...)` — 输出 systemd service 文件
+  - `_install_signal_handlers` — SIGINT / SIGTERM 优雅退出
+- **`novel/commands/_daemon.py`**：4 子命令 run / status / stop / unit
+- **`AutoSpec` / `AutoState` 字段**：
+  - `daemon_criteria_path: str`
+  - `max_iterations: int = 3`
+  - `max_time_seconds: int = 0`
+  - `extra: str = ""`（注入到下轮 prompts 的反馈）
+  - `iteration_count / last_criteria_report / last_iter_passed`（state 持久化）
+
+### CLI
+```bash
+# 前台长跑（Ctrl-C 优雅退出）
+novel daemon run my_novel \
+  --criteria ./quality_criteria.md \
+  --max-iterations 3 --cost-budget 30 --serve
+
+# 状态 / 停止 / 生成 systemd unit
+novel daemon status
+novel daemon stop
+novel daemon unit --user ubuntu > /etc/systemd/system/novel.service
+```
+
+### 反馈注入机制
+每轮迭代：
+1. 跑 6 阶段生成 book.md
+2. 调 `evaluate_via_llm` 评估 `quality_criteria.md` → 拿 `top_priority_fixes`
+3. 反馈格式化成 `spec.extra`，下一轮注入到 `build_chapter_messages` 的「## 作者额外要求」段
+4. LLM 看到上一轮问题 → 改进
+
+### 终止条件（OR）
+- `iteration_count >= max_iterations`
+- `cumulative_cost_cny >= cost_budget`
+- `elapsed >= max_time_seconds`
+- `.novel/stop_daemon` 文件存在
+- SIGINT / SIGTERM
+- `evaluate_via_llm.all_passed == True`
+
+### 部署模式
+- **前台**：`novel daemon run` 直接跑（开发 / 短任务）
+- **后台**：systemd / launchd / supervisord 管（生成 unit file）
+
+### 测试
+- `tests/test_daemon.py`：29 用例
+  - criteria 解析 7 用例（list 标记 / 标题 / code block / 备选标记 / 空 / 不存在）
+  - JSON 提取 3 用例（```json / 散文 / 无 JSON 兜底）
+  - feedback 格式 2 用例
+  - 终止条件 6 路径
+  - systemd unit 2 用例
+  - 端到端 5 用例（无 criteria / 全 pass / 多次后 pass / max_iter / stop file）
+  - CLI 4 用例
+- 全套 **326 用例**全过（297 → 326 +29）
+
+### 文档
+- PROGRESS §5.18 v0.15 daemon 完整设计
+- CHANGELOG [0.15.0]
+- USER_MANUAL §4.13 novel daemon 运维部署
+- DEVELOPER_GUIDE §4.14 daemon 实现 + state 字段

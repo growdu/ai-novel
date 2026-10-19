@@ -467,3 +467,25 @@ def build_fanfic_messages(source_info, ending_state, character, era, target_word
 
 
 _NO_THINK_HINT = "\n[系统提醒] 直接输出所要求的内容，不要任何 think 块或思考性话语。\n"
+
+
+def build_daemon_criteria_messages(criteria_lines, full_text, prev_feedback=""):
+    """v0.15 daemon 用：评估小说是否满足用户硬指标。
+
+    criteria_lines: list[str]（每条硬指标）
+    full_text: 完整小说正文
+    prev_feedback: 上一轮评估的 top_priority_fixes（注入到 prompt）
+    """
+    from novel.prompts import PROMPTS_DIR
+    sys_prompt = (PROMPTS_DIR / "daemon_criteria.md").read_text(encoding="utf-8")
+    user_parts = [
+        "## 硬指标（按行对应 ID）",
+        "\n".join(f"[{i+1}] {c}" for i, c in enumerate(criteria_lines)),
+        "",
+        "## 完整小说正文",
+        full_text,
+    ]
+    if prev_feedback:
+        user_parts.extend(["", "## 上一轮评估的反馈（请针对性改进）", prev_feedback])
+    return [Message("system", sys_prompt + _NO_THINK_HINT), Message("user", "\n\n".join(user_parts))]
+
