@@ -55,6 +55,16 @@ def run(
     max_iterations: int = typer.Option(3, "--max-iterations", help="最多迭代轮数"),
     cost_budget: float = typer.Option(0.0, "--cost-budget", help="总成本上限 CNY；0=不限"),
     max_time: int = typer.Option(0, "--max-time", help="总时间上限秒；0=无限"),
+    eval_batch_size: int = typer.Option(
+        12, "--eval-batch-size",
+        help="分块评估时每批章数（v0.17；长篇必用，避免整书塞进单 prompt）",
+    ),
+    eval_overlap: int = typer.Option(
+        4, "--eval-overlap", help="分块评估的批间重叠章数（给「每 N 章」窗口指标留衔接）",
+    ),
+    parallel: int = typer.Option(
+        1, "--parallel", "-p", help="写作阶段并发 worker 数；1=串行，>=2 并发（长篇强烈建议 3+）",
+    ),
     serve: bool = typer.Option(False, "--serve", help="同时启 Web 仪表盘"),
     serve_port: int = typer.Option(8765, "--serve-port"),
     here: bool = typer.Option(False, "--here", help="就地对当前目录运行"),
@@ -92,6 +102,7 @@ def run(
     spec.max_iterations = max_iterations
     spec.max_time_seconds = max_time
     spec.budget_cny = cost_budget or spec.budget_cny
+    spec.parallel = max(1, parallel)
 
     # 启动 web 仪表盘
     if serve:
@@ -106,7 +117,9 @@ def run(
         f"[bold green]novel daemon 启动[/bold green]\n"
         f"项目: {project_dir}\n"
         f"criteria: {criteria or '[无 → 跑 1 轮后退出]'}\n"
-        f"max_iterations={max_iterations}  cost_budget={cost_budget}  max_time={max_time}s",
+        f"目标: {spec.target_chapters} 章 × {spec.target_words} 字\n"
+        f"max_iterations={max_iterations}  cost_budget={cost_budget}  max_time={max_time}s\n"
+        f"评估分块: batch={eval_batch_size} overlap={eval_overlap}   写作并发: {spec.parallel}",
         title="novel daemon run",
     ))
 
@@ -116,6 +129,8 @@ def run(
         max_iterations=max_iterations,
         cost_budget=cost_budget,
         max_time_seconds=max_time,
+        eval_batch_size=eval_batch_size,
+        eval_overlap=eval_overlap,
     )
 
     # 输出总结

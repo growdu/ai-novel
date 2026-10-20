@@ -1,12 +1,12 @@
 """v0.15+ novel daemon 单测：DRY_RUN 端到端 + criteria 解析 + iteration 终止条件。
 
 覆盖：
-  1. criteria 解析（load_criteria）+ LLM 评估器 mock（evaluate_via_llm）
+  1. criteria 解析（load_criteria）+ LLM 评估器 mock（evaluate_batches）
   2. feedback 注入（format_feedback_for_next_iter）
   3. _check_should_stop 终止条件
   4. systemd unit 渲染（render_systemd_unit）
   5. stop signal（is_stop_requested）
-  6. _daemon_loop 端到端：mock run_auto_novel + evaluate_via_llm
+  6. _daemon_loop 端到端：mock run_auto_novel + evaluate_batches
 """
 from __future__ import annotations
 
@@ -214,7 +214,7 @@ class TestSystemdUnit:
 
 
 # ---------------------------------------------------------------------------
-# 6. 端到端：_daemon_loop（mock run_auto_novel + evaluate_via_llm）
+# 6. 端到端：_daemon_loop（mock run_auto_novel + evaluate_batches）
 # ---------------------------------------------------------------------------
 
 def _fake_project(tmp_path, *, chapter_text="内容", target_words=9000, chapters=3):
@@ -256,7 +256,7 @@ class _FakeClient:
 
 
 class TestDaemonLoopEndToEnd:
-    """Mock run_auto_novel + evaluate_via_llm，验证 daemon 主循环的：
+    """Mock run_auto_novel + evaluate_batches，验证 daemon 主循环的：
     - 终止条件触发
     - feedback 注入
     - state 保存
@@ -276,12 +276,12 @@ class TestDaemonLoopEndToEnd:
             return project_dir / "book.md"
         monkeypatch.setattr("novel.auto.run_auto_novel", fake_run)
 
-        # Mock evaluate_via_llm（不应该被调用）
+        # Mock evaluate_batches（不应该被调用）
         called = [False]
         def fake_eval(*a, **k):
             called[0] = True
             return _mock_passed_report()
-        monkeypatch.setattr(D, "evaluate_via_llm", fake_eval)
+        monkeypatch.setattr(D, "evaluate_batches", fake_eval)
 
         # 关闭 LLMClient 默认实例
         monkeypatch.setattr("novel.criteria.LLMClient", _FakeClient)
@@ -314,7 +314,7 @@ class TestDaemonLoopEndToEnd:
             return project_dir / "book.md"
         monkeypatch.setattr("novel.auto.run_auto_novel", fake_run)
 
-        monkeypatch.setattr(D, "evaluate_via_llm", lambda *a, **k: _mock_passed_report())
+        monkeypatch.setattr(D, "evaluate_batches", lambda *a, **k: _mock_passed_report())
         monkeypatch.setattr("novel.criteria.LLMClient", _FakeClient)
 
         cfg = type("Cfg", (), {"dry_run": True})()
@@ -342,7 +342,7 @@ class TestDaemonLoopEndToEnd:
             iter_count[0] += 1
             return project_dir / "book.md"
         monkeypatch.setattr("novel.auto.run_auto_novel", fake_run)
-        monkeypatch.setattr(D, "evaluate_via_llm", fake_eval)
+        monkeypatch.setattr(D, "evaluate_batches", fake_eval)
         monkeypatch.setattr("novel.criteria.LLMClient", _FakeClient)
 
         cfg = type("Cfg", (), {"dry_run": True})()
@@ -365,7 +365,7 @@ class TestDaemonLoopEndToEnd:
 
         monkeypatch.setattr("novel.auto.run_auto_novel",
                              lambda *a, **k: a[1] / "book.md")
-        monkeypatch.setattr(D, "evaluate_via_llm", lambda *a, **k: _mock_failed_report())
+        monkeypatch.setattr(D, "evaluate_batches", lambda *a, **k: _mock_failed_report())
         monkeypatch.setattr("novel.criteria.LLMClient", _FakeClient)
 
         cfg = type("Cfg", (), {"dry_run": True})()
@@ -394,7 +394,7 @@ class TestDaemonLoopEndToEnd:
                 (_stop_signal_path(project_dir)).touch()
             return project_dir / "book.md"
         monkeypatch.setattr("novel.auto.run_auto_novel", fake_run)
-        monkeypatch.setattr(D, "evaluate_via_llm", lambda *a, **k: _mock_failed_report())
+        monkeypatch.setattr(D, "evaluate_batches", lambda *a, **k: _mock_failed_report())
         monkeypatch.setattr("novel.criteria.LLMClient", _FakeClient)
 
         cfg = type("Cfg", (), {"dry_run": True})()

@@ -489,3 +489,40 @@ def build_daemon_criteria_messages(criteria_lines, full_text, prev_feedback=""):
         user_parts.extend(["", "## 上一轮评估的反馈（请针对性改进）", prev_feedback])
     return [Message("system", sys_prompt + _NO_THINK_HINT), Message("user", "\n\n".join(user_parts))]
 
+
+def build_daemon_criteria_batch_messages(
+    criteria_lines, batch_chapters, prev_feedback="", batch_note="",
+):
+    """v0.17 daemon 分块评估：只评这一批章节，避免整书塞进单 prompt。
+
+    criteria_lines: list[str]（每条硬指标）
+    batch_chapters: list[dict]，每项 {no, title, words, text}
+    prev_feedback: 上一轮评估的 top_priority_fixes（注入到 prompt）
+    batch_note: 批次说明（如「本批 1-12 章，尾部 4 章与上批重叠」）
+    """
+    from novel.prompts import PROMPTS_DIR
+    sys_prompt = (PROMPTS_DIR / "daemon_criteria_batch.md").read_text(encoding="utf-8")
+    # 字数由程序精确统计后给 LLM 采信，避免模型自己数字数（长篇场景必错）
+    wc_table = "\n".join(
+        f"第{c['no']}章 {c.get('title', '')}：{c.get('words', 0)} 字".rstrip("：")
+        for c in batch_chapters
+    )
+    user_parts = [
+        "## 硬指标（按行对应 ID）",
+        "\n".join(f"[{i+1}] {c}" for i, c in enumerate(criteria_lines)),
+        "",
+        "## 本章字数表（精确统计，直接采信，不要自己数）",
+        wc_table,
+        "",
+    ]
+    if batch_note:
+        user_parts.extend(["## 本批范围", batch_note, ""])
+    for c in batch_chapters:
+        title = c.get("title", "")
+        user_parts.append(
+            f"## 第{c['no']}章 {title}\n\n{c['text']}".rstrip() + "\n\n---"
+        )
+    if prev_feedback:
+        user_parts.extend(["## 上一轮评估的反馈（请针对性改进）", prev_feedback])
+    return [Message("system", sys_prompt + _NO_THINK_HINT), Message("user", "\n\n".join(user_parts))]
+

@@ -22,12 +22,18 @@ from pathlib import Path
 
 from novel.llm import LLMClient
 from novel.config import GlobalConfig
-from novel.prompts import build_daemon_criteria_messages
+from novel.prompts import (
+    build_daemon_criteria_messages,
+    build_daemon_criteria_batch_messages,
+)
 
 
 __all__ = [
     "load_criteria",
     "evaluate_via_llm",
+    "evaluate_batches",
+    "plan_batches",
+    "plan_batches_by_chars",
     "format_feedback_for_next_iter",
     "CriterionResult",
     "EvaluatorReport",
@@ -43,6 +49,7 @@ class CriterionResult:
     passed: bool
     evidence: str = ""
     suggestion: str = ""
+    failed_chapters: list[int] = field(default_factory=list)  # v0.17 分块：这条指标在哪几章违反
 
 
 @dataclass
@@ -61,7 +68,8 @@ class EvaluatorReport:
             "all_passed": self.all_passed,
             "criteria": [
                 {"id": c.id, "text": c.text, "passed": c.passed,
-                 "evidence": c.evidence, "suggestion": c.suggestion}
+                 "evidence": c.evidence, "suggestion": c.suggestion,
+                 "failed_chapters": list(c.failed_chapters)}
                 for c in self.criteria
             ],
             "top_priority_fixes": list(self.top_priority_fixes),
@@ -131,6 +139,23 @@ def _extract_json_block(text: str) -> str:
     return ""
 
 
+def _coerce_int_list(raw) -> list[int]:
+    """把 LLM 给的章节号列表转成升序去重的 int 列表。非 int 元素丢弃。"""
+    out: list[int] = []
+    if isinstance(raw, list):
+        for x in raw:
+            try:
+                out.append(int(x))
+            except (TypeError, ValueError):
+                continue
+    elif isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        try:
+            out.append(int(raw))
+        except (TypeError, ValueError):
+            pass
+    return sorted(set(out))
+
+
 def _parse_report(parsed: dict) -> EvaluatorReport:
     """把 LLM JSON 输出解析成 EvaluatorReport。容错处理：字段缺失用空。"""
     summary = str(parsed.get("summary", ""))
@@ -147,20 +172,14 @@ def _parse_report(parsed: dict) -> EvaluatorReport:
             passed=bool(c.get("passed", False)),
             evidence=str(c.get("evidence", "")),
             suggestion=str(c.get("suggestion", "")),
+            # v0.17 分块：单条指标自己声明违反了哪几章
+            failed_chapters=_coerce_int_list(c.get("failed_chapters", []) or []),
         ))
     fixes = parsed.get("top_priority_fixes", []) or []
     if isinstance(fixes, str):
         fixes = [fixes]
     # v0.16+：failed_chapters 解析（LLM 输出如 [3, 7, 12]）
-    raw_failed = parsed.get("failed_chapters", []) or []
-    failed_chapters: list[int] = []
-    if isinstance(raw_failed, list):
-        for x in raw_failed:
-            try:
-                failed_chapters.append(int(x))
-            except (TypeError, ValueError):
-                continue
-    failed_chapters = sorted(set(failed_chapters))
+    failed_chapters = _coerce_int_list(parsed.get("failed_chapters", []) or [])
     return EvaluatorReport(
         summary=summary,
         all_passed=all_passed,
@@ -216,6 +235,248 @@ def evaluate_via_llm(
     report = _parse_report(parsed)
     report.raw_text = raw
     return report
+
+
+# ---------------------------------------------------------------------------
+# v0.17 分块评估：长篇项目（几百章）不能把整书塞进一个 prompt
+# ---------------------------------------------------------------------------
+
+DEFAULT_BATCH_SIZE = 12
+DEFAULT_BATCH_OVERLAP = 4
+MAX_BATCH_CHARS = 120_000  # 单批正文上限，防止 batch_size 大 + 章长时爆上下文
+
+
+def plan_batches(n_items: int, batch_size: int = DEFAULT_BATCH_SIZE,
+                 overlap: int = DEFAULT_BATCH_OVERLAP) -> list[tuple[int, int]]:
+    """把 n_items 项切成若干 [(start, end)) 半开区间，尾部带重叠窗口。
+
+    重叠是给「每 N 章至少一次」这类跨章窗口指标看的——只看批内证据也能判，
+    但重叠能减少批次边界的盲区。
+
+    Examples:
+        >>> plan_batches(10, batch_size=4, overlap=1)
+        [(0, 4), (3, 7), (6, 10)]
+        >>> plan_batches(0)
+        []
+    """
+    if n_items <= 0:
+        return []
+    batch_size = max(1, int(batch_size))
+    overlap = max(0, min(int(overlap), batch_size - 1))
+    step = batch_size - overlap
+    out: list[tuple[int, int]] = []
+    start = 0
+    while start < n_items:
+        end = min(start + batch_size, n_items)
+        out.append((start, end))
+        if end >= n_items:
+            break
+        start += step
+    return out
+
+
+def plan_batches_by_chars(chapters: list[dict], batch_size: int = DEFAULT_BATCH_SIZE,
+                          overlap: int = DEFAULT_BATCH_OVERLAP,
+                          max_chars: int = MAX_BATCH_CHARS) -> list[tuple[int, int]]:
+    """按字符数二次收敛的切块：batch_size 和 max_chars 谁先到谁切。
+
+    章节长短悬殊时（有的 500 字有的 8000 字）光按章数切仍可能爆上下文。
+    """
+    if not chapters:
+        return []
+    out: list[tuple[int, int]] = []
+    start = 0
+    n = len(chapters)
+    while start < n:
+        end = start
+        chars = 0
+        while end < n and (end - start) < max(1, batch_size):
+            c = len(chapters[end].get("text", ""))
+            if end > start and chars + c > max_chars:
+                break
+            chars += c
+            end += 1
+        out.append((start, end))
+        if end >= n:
+            break
+        step = max(1, (end - start) - max(0, min(overlap, end - start - 1)))
+        start += step
+    return out
+
+
+def _aggregate_batch_reports(reports: list[EvaluatorReport],
+                             batch_ranges: list[tuple[int, int]],
+                             criteria_lines: list[str]) -> EvaluatorReport:
+    """把逐批报告聚合成一份全书报告。
+
+    聚合语义：
+      - criterion.passed = 该指标在**所有批**都通过才算通过（任一批挂即挂）
+      - criterion.failed_chapters = 各批 failed_chapters 并集
+      - evidence / suggestion 取**第一条失败**批次的（最有信息量）
+      - 顶层 failed_chapters = 各批并集
+      - 某指标在某批缺失 → 视为通过（不因模型漏报而误判失败）
+    """
+    agg: dict[int, CriterionResult] = {}
+    failed_all: set[int] = set()
+    fixes: list[str] = []
+    seen_fixes: set[str] = set()
+    ok_batches = 0
+
+    for rep in reports:
+        if rep.all_passed and not rep.failed_chapters and not any(
+            not c.passed for c in rep.criteria
+        ):
+            ok_batches += 1
+        failed_all |= set(rep.failed_chapters)
+        for c in rep.criteria:
+            cur = agg.get(c.id)
+            if cur is None:
+                cur = CriterionResult(
+                    id=c.id,
+                    text=c.text or (criteria_lines[c.id - 1]
+                                    if 0 < c.id <= len(criteria_lines) else ""),
+                    passed=c.passed,
+                    evidence=c.evidence,
+                    suggestion=c.suggestion,
+                    failed_chapters=list(c.failed_chapters),
+                )
+                agg[c.id] = cur
+            else:
+                # 任一批失败 → 整体失败；保留首次失败的证据
+                if not c.passed:
+                    cur.passed = False
+                    if not cur.evidence:
+                        cur.evidence = c.evidence
+                    if not cur.suggestion:
+                        cur.suggestion = c.suggestion
+                cur.failed_chapters = sorted(
+                    set(cur.failed_chapters) | set(c.failed_chapters)
+                )
+        for f in rep.top_priority_fixes:
+            fs = str(f).strip()
+            if fs and fs not in seen_fixes:
+                seen_fixes.add(fs)
+                fixes.append(fs)
+
+    # 兜底：模型完全没回的指标，按通过处理但保留 text
+    for i, line in enumerate(criteria_lines, start=1):
+        agg.setdefault(i, CriterionResult(id=i, text=line, passed=True))
+
+    criteria_out = [agg[k] for k in sorted(agg)]
+    # 未通过的指标排在前面，方便反馈注入取重点
+    criteria_out.sort(key=lambda c: (c.passed, c.id))
+    all_passed = not failed_all and all(c.passed for c in criteria_out)
+    n_failed = len(failed_all)
+    return EvaluatorReport(
+        summary=(
+            f"分块评估 {len(reports)} 批（{ok_batches} 批全通过）："
+            f"{len(criteria_out) - sum(1 for c in criteria_out if c.passed)}"
+            f"/{len(criteria_out)} 条指标未通过，涉及 {n_failed} 章"
+        ),
+        all_passed=all_passed,
+        criteria=criteria_out,
+        top_priority_fixes=fixes[:8],
+        failed_chapters=sorted(failed_all),
+        raw_text="",
+    )
+
+
+def evaluate_batches(
+    criteria_lines: list[str],
+    chapters: list[dict],
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    overlap: int = DEFAULT_BATCH_OVERLAP,
+    prev_feedback: str = "",
+    client=None,
+    target_words: int = 800,
+    max_chars: int = MAX_BATCH_CHARS,
+    on_progress=None,
+) -> EvaluatorReport:
+    """分块评估：把 chapters 切批，逐批调 LLM，最后聚合成一份报告。
+
+    Args:
+        criteria_lines: load_criteria() 的结果
+        chapters: [{no, title, words, text}, ...]，需按章号升序
+        batch_size: 每批最多几章
+        overlap: 批间重叠章数（给「每 N 章」窗口指标留衔接）
+        prev_feedback: 上一轮反馈，注入 prompt
+        on_progress: 进度回调 on_progress(batch_idx, total, report_or_None)
+            传 None 表示该批调用异常被跳过
+
+    Returns:
+        EvaluatorReport: 聚合报告。全空 chapters → all_passed=True。
+    """
+    if not criteria_lines:
+        return EvaluatorReport(summary="无 criteria", all_passed=True)
+    if not chapters:
+        return EvaluatorReport(
+            summary="无章节可评估", all_passed=False, failed_chapters=[]
+        )
+
+    client = client or LLMClient(GlobalConfig())
+    ranges = plan_batches_by_chars(chapters, batch_size, overlap, max_chars)
+    reports: list[EvaluatorReport] = []
+    raws: list[str] = []
+
+    for bi, (s, e) in enumerate(ranges):
+        batch = chapters[s:e]
+        nos = [c["no"] for c in batch]
+        note = f"本批第 {nos[0]}–{nos[-1]} 章（共 {len(batch)} 章）"
+        if s > 0:
+            note += f"；前 {min(overlap, len(batch))} 章与上一批重叠，用于衔接判断"
+        msgs = build_daemon_criteria_batch_messages(
+            criteria_lines, batch, prev_feedback, batch_note=note,
+        )
+        try:
+            res = client.chat_with_continuation(
+                msgs, target_words=target_words,
+                max_total_tokens=16000, temperature=0.3,
+            )
+        except Exception as exc:  # 单批失败不该炸掉整轮评估
+            if on_progress:
+                on_progress(bi, len(ranges), None, error=str(exc))
+            continue
+        raw = (res.content or "").strip()
+        raws.append(f"=== batch {bi + 1}/{len(ranges)} ch{nos[0]}-{nos[-1]} ===\n{raw}")
+        json_text = _extract_json_block(raw)
+        if not json_text:
+            continue
+        try:
+            parsed = json.loads(json_text)
+        except json.JSONDecodeError:
+            continue
+        rep = _parse_report(parsed)
+        rep.raw_text = raw
+        # 只信本批真实出现过的章号——LLM 编的章号一律丢掉，否则 surgical 会去
+        # 重写一个不存在的章
+        valid = set(nos)
+        for c in rep.criteria:
+            c.failed_chapters = [n for n in c.failed_chapters if n in valid]
+            if not c.passed and not c.failed_chapters:
+                # 说没过却指不出章：保守起见记整批，避免漏重写
+                c.failed_chapters = list(nos)
+        # 顶层 failed_chapters 必须包含各 criterion 的章号——LLM 常在顶层漏填，
+        # 只信顶层会把「整批待重写」的保守回填吃掉，surgical 就漏章了
+        crit_chapters: set[int] = set()
+        for c in rep.criteria:
+            crit_chapters |= set(c.failed_chapters)
+        rep.failed_chapters = sorted((set(rep.failed_chapters) | crit_chapters) & valid)
+        if on_progress:
+            on_progress(bi, len(ranges), rep)
+        reports.append(rep)
+
+    if not reports:
+        # fail-safe：一个批都没解析出可用的 JSON 绝不能报「全通过」，
+        # 否则 daemon 会误判达标直接退出，白烧一轮生成 quota
+        return EvaluatorReport(
+            summary=f"分块评估失败：{len(ranges)} 批全部未产出可解析 JSON",
+            all_passed=False,
+            raw_text="\n\n".join(raws),
+        )
+
+    agg = _aggregate_batch_reports(reports, ranges, criteria_lines)
+    agg.raw_text = "\n\n".join(raws)
+    return agg
 
 
 def format_feedback_for_next_iter(report: EvaluatorReport) -> str:

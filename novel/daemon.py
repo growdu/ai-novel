@@ -51,6 +51,7 @@
 from __future__ import annotations
 
 import json
+import re
 import signal
 import time
 from dataclasses import replace
@@ -63,8 +64,10 @@ from rich.table import Table
 from novel import storage as S
 from novel.auto_state import AutoSpec, AutoState, Phase
 from novel.criteria import (
+    DEFAULT_BATCH_OVERLAP,
+    DEFAULT_BATCH_SIZE,
     EvaluatorReport,
-    evaluate_via_llm,
+    evaluate_batches,
     format_feedback_for_next_iter,
     load_criteria,
 )
@@ -102,7 +105,7 @@ def is_stop_requested(project_dir: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 def _read_all_chapters(project_dir: Path) -> str:
-    """拼所有章节为单字符串（评估用）。"""
+    """拼所有章节为单字符串（旧版整书评估路径，保留兼容）。"""
     proj = S.load_project(project_dir)
     parts: list[str] = []
     for c in proj.list_chapters():
@@ -110,6 +113,47 @@ def _read_all_chapters(project_dir: Path) -> str:
         text = c.read_text(encoding="utf-8") if c.exists() else ""
         parts.append(f"## 第 {n} 章\n\n{text}")
     return "\n\n---\n\n".join(parts)
+
+
+def _read_chapter_list(project_dir: Path) -> list[dict]:
+    """读全书章节成 [{no, title, words, text}, ...]，按章号升序。
+
+    v0.17 分块评估用。字数在 Python 侧精确统计好塞进 prompt——让 LLM 自己
+    数字数在长篇场景必错，而 criteria.md 里字数类指标占比很高。
+    """
+    proj = S.load_project(project_dir)
+    out: list[dict] = []
+    for path in proj.list_chapters():
+        try:
+            no = int(path.stem)
+        except ValueError:
+            continue
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        title = ""
+        for line in text.splitlines():
+            s = line.strip().lstrip("#").strip()
+            if s and not s.startswith("第"):
+                title = s[:40]
+                break
+            if s.startswith("第"):
+                # 「第 12 章 标题」→ 只取标题部分
+                m = re.search(r"第\s*\d+\s*章\s*(.*)", s)
+                if m and m.group(1).strip():
+                    title = m.group(1).strip()[:40]
+                break
+        out.append({
+            "no": no,
+            "title": title,
+            "words": S.chapter_word_count(text),
+            "text": text,
+        })
+    out.sort(key=lambda c: c["no"])
+    return out
 
 
 def _check_should_stop(
@@ -157,6 +201,8 @@ def _daemon_loop(
     max_iterations: int = 3,
     cost_budget: float = 0.0,
     max_time_seconds: int = 0,
+    eval_batch_size: int = DEFAULT_BATCH_SIZE,
+    eval_overlap: int = DEFAULT_BATCH_OVERLAP,
 ) -> AutoState:
     """主循环。返回最终的 AutoState（已 DONE 或已停在某轮）。"""
     from novel.auto import run_auto_novel
@@ -244,13 +290,32 @@ def _daemon_loop(
             state.save(project_dir)
             return state
 
-        console.print("[cyan]评估硬指标（LLM 调用）...[/cyan]")
-        full_text = _read_all_chapters(project_dir)
+        console.print(
+            f"[cyan]评估硬指标（分块 LLM 调用，batch={eval_batch_size} "
+            f"overlap={eval_overlap}）...[/cyan]"
+        )
+        chapters = _read_chapter_list(project_dir)
         prev_feedback = format_feedback_for_next_iter(last_report) if last_report else ""
+
+        def _on_progress(bi: int, total: int, rep, error: str = "") -> None:
+            head = f"  [dim]批 {bi + 1}/{total}[/dim]"
+            if error:
+                console.print(f"{head} [yellow]调用失败，跳过：{error[:60]}[/yellow]")
+                return
+            if rep is not None and rep.failed_chapters:
+                ns = rep.failed_chapters
+                span = f"{ns[0]}-{ns[-1]} 章" if len(ns) > 6 else ",".join(str(n) for n in ns)
+                console.print(f"{head} [yellow]{len(ns)} 章未达标：{span}[/yellow]")
+            else:
+                console.print(f"{head} [green]全通过[/green]")
         try:
-            report = evaluate_via_llm(
-                criteria_lines, full_text, prev_feedback,
+            report = evaluate_batches(
+                criteria_lines, chapters,
+                batch_size=eval_batch_size,
+                overlap=eval_overlap,
+                prev_feedback=prev_feedback,
                 client=LLMClient(cfg),
+                on_progress=_on_progress,
             )
         except Exception as e:
             console.print(f"[red]criteria 评估失败：{e}[/red]")

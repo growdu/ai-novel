@@ -149,7 +149,7 @@ class TestDaemonSurgicalLoop:
             return project_dir / "book.md"
 
         monkeypatch.setattr("novel.auto.run_auto_novel", fake_run)
-        monkeypatch.setattr(D, "evaluate_via_llm", lambda *a, **k: _mock_passed_report())
+        monkeypatch.setattr(D, "evaluate_batches", lambda *a, **k: _mock_passed_report())
         monkeypatch.setattr("novel.criteria.LLMClient", _FakeLLM)
 
         cfg = type("Cfg", (), {"dry_run": True})()
@@ -186,7 +186,7 @@ class TestDaemonSurgicalLoop:
             return project_dir / "book.md"
 
         monkeypatch.setattr("novel.auto.run_auto_novel", fake_run)
-        monkeypatch.setattr(D, "evaluate_via_llm", fake_eval)
+        monkeypatch.setattr(D, "evaluate_batches", fake_eval)
         monkeypatch.setattr("novel.criteria.LLMClient", _FakeLLM)
 
         cfg = type("Cfg", (), {"dry_run": True})()
@@ -231,7 +231,7 @@ class TestDaemonSurgicalLoop:
             return project_dir / "book.md"
 
         monkeypatch.setattr("novel.auto.run_auto_novel", fake_run)
-        monkeypatch.setattr(D, "evaluate_via_llm", fake_eval)
+        monkeypatch.setattr(D, "evaluate_batches", fake_eval)
         monkeypatch.setattr("novel.criteria.LLMClient", _FakeLLM)
 
         cfg = type("Cfg", (), {"dry_run": True})()

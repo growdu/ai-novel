@@ -4,6 +4,43 @@ novel-writer 的版本变更记录。遵循 [Keep a Changelog](https://keepachan
 
 ---
 
+## [0.17.0] - 分块评估（长篇支持）
+
+### 背景
+`text/yuzhou_chuanshuo` 第一部《第七界域》421 章接入内核后实测：拼接全文 **783,998 字符**。
+v0.15/0.16 的 `evaluate_via_llm` 把整本书塞进**单 prompt** —— 421 章场景必炸（超上下文 / 成本失控）。
+
+### 修复 + 新增
+- `novel/commands/_project.py` 补 `import re`（漏导入致 `progress` / `audit` 必崩 `NameError`）
+- `prompts/daemon_criteria_batch.md`：分块评估 prompt
+  - 每条 criteria 自带 `failed_chapters`，定位到章
+  - 注入**程序精确统计的字数表**，不让 LLM 自己数字数
+  - 明确「每 N 章」窗口指标按批内可见证据判断
+- `novel/criteria.py`
+  - `plan_batches()` / `plan_batches_by_chars()`：切块 + 重叠窗口；章长悬殊时按字符数二次收敛
+  - `evaluate_batches()`：逐批调 LLM → 聚合
+  - `_aggregate_batch_reports()`：criterion **全批通过才算通过**；failed_chapters 取并集；fixes 去重
+  - **章号防幻觉**：LLM 编的本批不存在的章号一律丢弃（否则 surgical 会去重写不存在的章）
+  - **fail-safe**：一批都没解析出 JSON 时绝不报「全通过」，否则 daemon 误判达标退出、白烧一轮额度
+  - `CriterionResult` 加 `failed_chapters` 字段
+- `novel/daemon.py`：改走 `evaluate_batches`，逐批进度输出；新增 `_read_chapter_list()`
+- `novel/commands/_daemon.py`：`daemon run` 新增 `--eval-batch-size`（默认 12）/ `--eval-overlap`（默认 4）/ `--parallel`
+
+### 实测（禹州 421 章）
+```
+总字数 599,734   criteria 46 条   →  53 批（每批 5-12 章，最大 39,105 字符）
+418 / 421 章低于 3000 字下限（与 GAP_LEDGER 47% 吻合）
+成本：单轮 ¥8.80（写作 3.50 + 润色 3.00 + 评估 2.30），3 轮约 ¥26
+```
+
+### 测试
+新增 `tests/test_criteria_batch.py` **39 用例**：切块/重叠/字符收敛、章号防幻觉、聚合语义、
+全批失败 fail-safe、单批异常跳过、prompt 构建。
+
+**全套 375 passed**（336 + 39）。
+
+---
+
 ## [Unreleased]
 
 ### 新增
