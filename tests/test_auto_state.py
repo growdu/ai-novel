@@ -41,7 +41,8 @@ class TestQualityPreset:
 
     def test_standard_balanced(self):
         p = QualityPreset.STANDARD
-        assert p.iters == 2
+        # 3 轮（曾为 2）：实测 2 轮时模型写不到字数下限（均 2034–2329 vs 下限 2400）
+        assert p.iters == 3
         assert p.word_tolerance == pytest.approx(0.2)
         assert p.ai_flavor_threshold == 50
         assert p.radar_threshold == 60

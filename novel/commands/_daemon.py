@@ -28,6 +28,23 @@ from novel.daemon import (
 console = Console()
 
 
+def _write_stop_file(project_dir: Path) -> Path:
+    """写停止信号，让两个检查点都看得到。
+
+    - stop_daemon：daemon 的**轮次级**检查（novel/daemon.py）
+    - auto_control.json：auto 流程的**章级**检查（novel/web.py ControlSignal）
+
+    只写前者的话，停止要等整轮跑完——一轮 421 章按实测约 20 小时。
+    """
+    from novel.web import ControlSignal
+
+    p = _stop_signal_path(project_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.touch()
+    ControlSignal.write(project_dir, ControlSignal.STOP)
+    return p
+
+
 def _load_or_init_spec(project_dir: Path, project_name: str) -> AutoSpec:
     """从 .novel/project.yaml + state 重建 spec（确保 daemon 用一致参数）。"""
     proj = S.load_project(project_dir)
@@ -171,10 +188,9 @@ def stop(
     if not (project_dir / ".novel").exists():
         console.print(f"[red]{project_dir} 不是 novel 项目[/red]")
         raise typer.Exit(1)
-    p = _stop_signal_path(project_dir)
-    p.touch()
+    p = _write_stop_file(project_dir)
     console.print(f"[green]已写入 {p}[/green]")
-    console.print("[dim]daemon 下一轮 check 时检测到该文件，退出循环。Ctrl-C 立刻退出。[/dim]")
+    console.print("[dim]daemon 下一章/下一轮 check 时检测到该文件，退出循环。Ctrl-C 立刻退出。[/dim]")
 
 
 def unit(

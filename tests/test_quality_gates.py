@@ -351,7 +351,7 @@ class TestQualityPresetAllPresets:
         (QualityPreset.DRAFT, {"ai_flavor_threshold": None, "radar_threshold": None,
                                   "word_tolerance": 0.3, "max_retries": 1, "iters": 1}),
         (QualityPreset.STANDARD, {"ai_flavor_threshold": 50, "radar_threshold": 60,
-                                    "word_tolerance": 0.2, "max_retries": 2, "iters": 2}),
+                                    "word_tolerance": 0.2, "max_retries": 2, "iters": 3}),
         (QualityPreset.PREMIUM, {"ai_flavor_threshold": 30, "radar_threshold": 70,
                                    "word_tolerance": 0.1, "max_retries": 3, "iters": 3}),
     ])

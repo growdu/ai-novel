@@ -64,12 +64,30 @@ console = Console()
 # Web 控制信号
 # ---------------------------------------------------------------------------
 
+def _stop_requested(project_root: Path) -> bool:
+    """任一停止信号存在即为真。
+
+    两条停止通路历史上各写各的文件，只认一条会让「立刻停止」退化成
+    「下一轮停止」——一轮 421 章，实测约 20 小时。这里两套都认。
+    """
+    try:
+        from novel.web import ControlSignal
+    except ImportError:
+        ControlSignal = None
+    if ControlSignal is not None and ControlSignal.read(project_root) == "stop":
+        return True
+    return (project_root / ".novel" / "stop_daemon").exists()
+
+
 def _check_control_signal(project_root: Path) -> None:
     """检查 .novel/auto_control.json 里的信号：pause/stop/downgrade/run。"""
     try:
         from novel.web import ControlSignal
     except ImportError:
         return
+    if _stop_requested(project_root):
+        console.print("[red]■ 检测到 STOP 信号：停止运行[/red]")
+        raise KeyboardInterrupt("user requested stop")
     signal = ControlSignal.read(project_root)
     if signal == ControlSignal.PAUSE:
         console.print("[yellow]⏸ 检测到 PAUSE 信号：等待用户继续（写 run 到 .novel/auto_control.json 恢复）[/yellow]")
@@ -77,9 +95,6 @@ def _check_control_signal(project_root: Path) -> None:
             import time as _t
             _t.sleep(2)
         console.print("[green]▶ 已恢复[/green]")
-    elif signal == ControlSignal.STOP:
-        console.print("[red]■ 检测到 STOP 信号：停止运行[/red]")
-        raise KeyboardInterrupt("user requested stop")
     elif signal == ControlSignal.DOWNGRADE:
         console.print("[yellow]⬇ 检测到 DOWNGRADE：降到 draft 档[/yellow]")
         # 通过 global state 引用降级：直接修改 spec.quality（仅影响后续阶段）
@@ -292,6 +307,35 @@ def _planning_phase(spec: _AutoSpec, project: S.Project, client, state: AutoStat
 # 阶段 2：逐章生成 + 质量门控
 # ---------------------------------------------------------------------------
 
+def _token_delta(
+    before: tuple[int, int, int], after: tuple[int, int, int]
+) -> tuple[int, int, int]:
+    """本章净消耗的 (prompt, completion, total)。
+
+    正常是 after - before。若计数器被重置（after < before），说明这一章的
+    调用全部发生在重置之后，直接取 after，避免算出负数或 0。
+    """
+    return tuple(
+        max(a - b, 0) if a >= b else a for b, a in zip(before, after, strict=True)
+    )
+
+
+def _client_token_snapshot(client) -> tuple[int, int, int]:
+    """取 client 的 token 快照；无计数能力时返回全 0。"""
+    getter = getattr(client, "token_snapshot", None)
+    if getter is None:
+        return (0, 0, 0)
+    return getter()
+
+
+def _client_model(client) -> str:
+    """模型名：client 上没有就落到 cfg.model（成本估算按模型分档）。"""
+    model = getattr(client, "model", "") or ""
+    if model:
+        return model
+    return getattr(getattr(client, "cfg", None), "model", "") or ""
+
+
 def _build_chapter_ctx(project: S.Project, n: int, extra: str = "") -> dict:
     """构造 ChapterContext dict 喂给 generator。
 
@@ -483,9 +527,25 @@ def _regenerate_chapter(
 
 
 def _build_retry_feedback(failed: list[GateResult], ctx: dict) -> str:
-    """把失败原因拼成 LLM 反馈。"""
+    """把失败原因拼成 LLM 反馈。
+
+    字数不足要给出可执行的补足量——只说「字数不够」模型只会重写一遍，
+    仍然落在下限之下（实测均 2034–2329 字，门槛 2400）。
+    """
     lines = ["【自动质量门控未通过】", "请解决："]
     for g in failed:
+        payload = g.payload if isinstance(g.payload, dict) else {}
+        if g.name == "word_count" and payload.get("min_words"):
+            shortfall = payload["min_words"] - payload["actual"]
+            if shortfall > 0:
+                lines.append(
+                    f"- word_count：当前 {payload['actual']} 字，低于下限 "
+                    f"{payload['min_words']} 字，需补足约 {shortfall} 字"
+                    f"（合格区间 {payload['min_words']}-{payload['max_words']} 字）。"
+                    f"新增内容必须展开新场景、新动作或新对话，"
+                    f"不得靠重复已有段落、改写或注水凑字数。"
+                )
+                continue
         lines.append(f"- {g.name}：{g.detail}")
     lines.append("")
     lines.append("重写时请严格遵循字数、对话占比、心理描写、避免 AI 句式等规则。")
@@ -643,23 +703,26 @@ def _writing_phase_parallel(
             ctx["prev_chapter_tail"] = prev_content[-500:]
 
         # 3. 写本章（在 safe_progress 包装下，更新到 progress bar）
+        token_before = _client_token_snapshot(client)
         result = _write_one_chapter_locked(spec, project, n, client, state, safe_progress)
+        # ChapterResult 只带元数据、不带 token，成本按 client 累计量的本章增量算。
+        p_tok, c_tok, t_tok = _token_delta(token_before, _client_token_snapshot(client))
 
         # 4. 累加 token + 标完成 + save（state_lock 串行化）
         with state_lock:
-            if hasattr(client, "prompt_tokens"):
-                state.cumulative_tokens += result.total_tokens or 0
-                state.cumulative_prompt_tokens += result.prompt_tokens
-                state.cumulative_completion_tokens += result.completion_tokens
-                from novel.budget import estimate_cost_cny
-                state.cumulative_cost_cny += estimate_cost_cny(
-                    result.prompt_tokens, result.completion_tokens,
-                    getattr(client, "model", ""),
-                )
+            state.cumulative_tokens += t_tok
+            state.cumulative_prompt_tokens += p_tok
+            state.cumulative_completion_tokens += c_tok
+            from novel.budget import estimate_cost_cny
+            state.cumulative_cost_cny += estimate_cost_cny(
+                p_tok, c_tok, _client_model(client),
+            )
             state.mark_chapter_done(result)
             state.save(project.root)
             with prev_cache_lock:
-                prev_cache[n] = result.content or ""
+                # ChapterResult 是 auto_state 的元数据类，没有 content 字段；
+                # 正文明明已落盘，这里直接读回来给下一章做 context。
+                prev_cache[n] = S.load_chapter(project, n) or ""
 
         # 5. 进度 +1
         with progress_lock:

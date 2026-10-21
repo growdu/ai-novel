@@ -163,6 +163,21 @@ def _build_rate_limit_error(status_code: int, text: str, headers) -> RateLimitEr
 class LLMClient:
     def __init__(self, cfg: GlobalConfig | None = None):
         self.cfg = cfg or GlobalConfig()
+        # 累计用量：auto.py 靠这些属性做成本统计与 budget 护栏。
+        # 单次调用的用量在 LLMResult 上，长跑编排需要的是跨调用累计值。
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+
+    def token_snapshot(self) -> tuple[int, int, int]:
+        """当前累计 (prompt, completion, total)，用于按章取增量。"""
+        return (self.prompt_tokens, self.completion_tokens, self.total_tokens)
+
+    def _accumulate_usage(self, usage: dict) -> None:
+        """把一次调用的 usage 并入累计计数。只有真正拿到响应才调用。"""
+        self.prompt_tokens += usage.get("prompt_tokens", 0) or 0
+        self.completion_tokens += usage.get("completion_tokens", 0) or 0
+        self.total_tokens += usage.get("total_tokens", 0) or 0
 
     def chat(self, messages, temperature=None, top_p=None, max_tokens=None, stop=None, retry=3):
         if self.cfg.dry_run:
@@ -213,6 +228,7 @@ class LLMClient:
             )
             content = _strip_think_tags(content)
             usage = data.get("usage", {}) or {}
+            self._accumulate_usage(usage)
             return LLMResult(
                 content=content,
                 model=data.get("model", self.cfg.model),

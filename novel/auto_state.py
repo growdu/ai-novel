@@ -48,7 +48,9 @@ class QualityPreset(str, Enum):
 
     @property
     def iters(self) -> int:
-        return {"draft": 1, "standard": 2, "premium": 3}[self.value]
+        # standard 给到 3 轮：实测 2 轮时模型写不到字数下限（均 2034–2329 vs 下限 2400），
+        # 多一轮 detect/polish 才有把篇幅拉上来的机会。
+        return {"draft": 1, "standard": 3, "premium": 3}[self.value]
 
     @property
     def word_tolerance(self) -> float:

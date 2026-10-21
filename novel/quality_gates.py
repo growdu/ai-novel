@@ -44,6 +44,12 @@ def check_word_count(content: str, target: int, tolerance: float) -> GateResult:
         passed=passed,
         score=float(actual),
         detail=detail,
+        payload={
+            "actual": actual,
+            "target": target,
+            "min_words": min_words,
+            "max_words": max_words,
+        },
     )
 
 
