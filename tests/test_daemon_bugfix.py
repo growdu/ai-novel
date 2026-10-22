@@ -263,6 +263,41 @@ class TestParallelNoContentCrash:
 
 
 # ---------------------------------------------------------------------------
+# F. 续跑时 state.phase 已是 done → out 未绑定崩溃
+# ---------------------------------------------------------------------------
+
+class TestResumeFromDonePhase:
+    """daemon 结束会把 phase 标成 done；续跑时导出块被跳过，out 从未赋值。"""
+
+    def test_resume_when_phase_is_done_does_not_crash(self, tmp_path, monkeypatch):
+        from novel.auto import run_auto_novel
+        from novel.auto_state import AutoSpec, AutoState, Phase, QualityPreset
+
+        monkeypatch.setenv("DRY_RUN", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key-12345678")
+
+        spec = AutoSpec(
+            title="resume_done",
+            target_words=6000,
+            target_chapters=3,
+            quality=QualityPreset.DRAFT,
+            parallel=2,
+        )
+        run_auto_novel(spec, tmp_path)
+
+        # 复现 daemon 中断后的状态：phase=done，但章节没写完
+        state = AutoState.load(tmp_path)
+        assert state is not None
+        state.phase = Phase.DONE
+        state.chapters_done = [1]
+        state.save(tmp_path)
+
+        # 续跑必须返回一个路径，而不是抛 UnboundLocalError
+        out = run_auto_novel(spec, tmp_path, state=state)
+        assert out is not None
+
+
+# ---------------------------------------------------------------------------
 # 回归护栏：auto_control.json 的形状别被改坏
 # ---------------------------------------------------------------------------
 

@@ -1052,6 +1052,10 @@ def run_auto_novel(
     # 包一层 TokenTracker，记录所有 LLM 调用的 token 用量
     client = TokenTracker(raw_client, model=cfg.model)
 
+    # 导出结果路径。阶段链条只在 phase 命中 CONSISTENCY/EXPORTING 时才赋值，
+    # 续跑一个 phase 已是 done 的项目时会整块跳过——这里先给默认值兜底。
+    out: Path | None = None
+
     # 加载项目
     if not (project_dir / ".novel").exists():
         from novel.storage import init_project
@@ -1143,6 +1147,9 @@ def run_auto_novel(
         return project_dir / "book.md"  # 不存在也无所谓
 
     # 汇总
+    if out is None:
+        # 续跑时导出块被跳过（phase 非 CONSISTENCY/EXPORTING），给出期望路径
+        out = project_dir / "book.md"
     _print_summary(state, out)
     return out
 
