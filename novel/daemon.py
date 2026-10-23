@@ -194,6 +194,30 @@ def _signal_stop_requested() -> bool:
     return getattr(_daemon_loop, "_stop_signal_received", False)
 
 
+def _rewrite_targets(
+    state: AutoState, last_report: Optional[EvaluatorReport], target_chapters: int
+) -> list[int] | None:
+    """决定本轮 surgical 重写哪些章；None 表示全本跑。
+
+    last_report 只在**当前进程内**的上一轮迭代才有值——daemon 每次重启它都是
+    None。此时必须回落到持久化的 last_failed_chapters，否则续跑时
+    only_chapters=None，写作阶段又会被 state.phase（多半是 done）挡掉，
+    变成「只评估不重写」的活锁。
+    """
+    if last_report is not None:
+        if last_report.all_passed or not last_report.failed_chapters:
+            return None
+        candidates = set(last_report.failed_chapters)
+    else:
+        if state.last_iter_passed or not state.last_failed_chapters:
+            return None
+        candidates = set(state.last_failed_chapters)
+
+    already_passed = set(state.passed_chapters)
+    to_rewrite = sorted(candidates - already_passed)
+    return to_rewrite or None
+
+
 def _daemon_loop(
     spec: AutoSpec,
     project_dir: Path,
@@ -233,18 +257,13 @@ def _daemon_loop(
             current_spec = replace(spec, extra=feedback)
 
         # v0.16+ surgical：第 1 轮跑全本，之后只重写未通过章
-        only_chapters: list[int] | None = None
-        if last_report is not None and not last_report.all_passed and last_report.failed_chapters:
-            # 取上轮 failed + 之前 passed（确保 surgical 范围精确）
+        only_chapters = _rewrite_targets(state, last_report, spec.target_chapters)
+        if only_chapters:
             all_chs = set(range(1, spec.target_chapters + 1))
-            already_passed = set(state.passed_chapters)
-            to_rewrite = set(last_report.failed_chapters) - already_passed
-            if to_rewrite:
-                only_chapters = sorted(to_rewrite)
-                console.print(
-                    f"[cyan]surgical 重写：第 {only_chapters} 章"
-                    f"（其余 {len(all_chs) - len(to_rewrite)} 章已通过，保留）[/cyan]"
-                )
+            console.print(
+                f"[cyan]surgical 重写：{len(only_chapters)} 章"
+                f"（其余 {len(all_chs) - len(only_chapters)} 章已通过，保留）[/cyan]"
+            )
 
         console.print(f"\n[bold]═══ 第 {iter_no} 轮迭代 ═══[/bold]")
         try:

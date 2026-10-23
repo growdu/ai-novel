@@ -436,6 +436,61 @@ class TestSurgicalRebuildNotBlocked:
 
 
 # ---------------------------------------------------------------------------
+# I. daemon 首轮也必须拿到重写目标（否则续跑等于只评估）
+# ---------------------------------------------------------------------------
+
+class TestRewriteTargets:
+    """daemon 每轮的第 1 次迭代 last_report=None——重写目标必须能从 state 取。"""
+
+    def _state(self):
+        from novel.auto_state import AutoState
+
+        state = AutoState(chapters_total=10)
+        state.last_failed_chapters = [1, 2, 3]
+        state.passed_chapters = [4, 5, 6, 7, 8, 9, 10]
+        state.last_iter_passed = False
+        return state
+
+    def test_uses_persisted_failures_when_no_report(self):
+        from novel.daemon import _rewrite_targets
+
+        assert _rewrite_targets(self._state(), None, 10) == [1, 2, 3]
+
+    def test_none_when_previous_iteration_passed(self):
+        from novel.daemon import _rewrite_targets
+
+        state = self._state()
+        state.last_iter_passed = True
+        assert _rewrite_targets(state, None, 10) is None
+
+    def test_none_when_no_failures_recorded(self):
+        from novel.daemon import _rewrite_targets
+
+        state = self._state()
+        state.last_failed_chapters = []
+        assert _rewrite_targets(state, None, 10) is None
+
+    def test_excludes_chapters_already_passed(self):
+        from novel.daemon import _rewrite_targets
+
+        state = self._state()
+        state.last_failed_chapters = [1, 2, 3, 5]
+        state.passed_chapters = [4, 5, 6, 7, 8, 9, 10]
+        assert _rewrite_targets(state, None, 10) == [1, 2, 3]
+
+    def test_report_takes_precedence_over_state(self):
+        from novel.daemon import _rewrite_targets
+
+        class _R:
+            all_passed = False
+            failed_chapters = [7, 8]
+
+        state = self._state()
+        state.passed_chapters = [1, 2, 3, 4, 5, 6, 9, 10]
+        assert _rewrite_targets(state, _R(), 10) == [7, 8]
+
+
+# ---------------------------------------------------------------------------
 # 回归护栏：auto_control.json 的形状别被改坏
 # ---------------------------------------------------------------------------
 
