@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -488,6 +489,57 @@ class TestRewriteTargets:
         state = self._state()
         state.passed_chapters = [1, 2, 3, 4, 5, 6, 9, 10]
         assert _rewrite_targets(state, _R(), 10) == [7, 8]
+
+
+# ---------------------------------------------------------------------------
+# J. 字数标准必须落在模型真实产能内
+# ---------------------------------------------------------------------------
+
+# 实测 daemon 跑出来的章节长度（v0.19 验证跑：41/42 章 + 历史 37 章）
+OBSERVED_CHAPTER_LENGTHS = (1704, 1780, 1811, 1864, 1900, 2037, 2065, 2196, 2333)
+
+
+class TestWordCountStandardIsAchievable:
+    """门槛定在模型做不到的位置 = daemon 无限重写同一批章节，烧钱不产出。"""
+
+    def test_project_per_chapter_words_is_2000(self):
+        from novel.commands._daemon import _load_or_init_spec
+
+        proj = Path(__file__).resolve().parents[1] / "text/yuzhou_chuanshuo/第一部_第三秩序"
+        spec = _load_or_init_spec(proj, "第七界域")
+
+        assert spec.per_chapter_words == 2000, (
+            f"per_chapter_words={spec.per_chapter_words}，"
+            f"全书 {spec.target_words} 字 / {spec.target_chapters} 章"
+        )
+
+    def test_every_observed_chapter_length_passes_the_gate(self):
+        """实测产出过的长度必须全部过门控，否则这些章会被反复重写。"""
+        from novel.auto_state import AutoSpec, QualityPreset
+        from novel.quality_gates import check_word_count
+
+        spec = AutoSpec(
+            title="t",
+            target_words=2000 * 421,
+            target_chapters=421,
+            quality=QualityPreset.STANDARD,
+        )
+        assert spec.per_chapter_words == 2000
+
+        failed = [
+            n
+            for n in OBSERVED_CHAPTER_LENGTHS
+            if not check_word_count(
+                "字" * n, spec.per_chapter_words, spec.quality.word_tolerance
+            ).passed
+        ]
+        assert failed == [], f"这些实测长度过不了门控：{failed}"
+
+    def test_criteria_md_word_range_matches_the_gate(self):
+        """criteria.md 与硬门控口径必须一致，否则 LLM 评估会重复报同一个问题。"""
+        proj = Path(__file__).resolve().parents[1] / "text/yuzhou_chuanshuo/第一部_第三秩序"
+        text = (proj / ".novel" / "criteria.md").read_text(encoding="utf-8")
+        assert "3000 字" not in text, "criteria.md 仍写着 3000 字门槛"
 
 
 # ---------------------------------------------------------------------------
