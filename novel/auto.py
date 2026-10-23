@@ -321,11 +321,48 @@ def _token_delta(
 
 
 def _client_token_snapshot(client) -> tuple[int, int, int]:
-    """取 client 的 token 快照；无计数能力时返回全 0。"""
-    getter = getattr(client, "token_snapshot", None)
-    if getter is None:
-        return (0, 0, 0)
-    return getter()
+    """取 token 计数快照。
+
+    auto 里往下传的是 TokenTracker（包着 LLMClient），两者都直接暴露
+    prompt_tokens / completion_tokens / total_tokens，按属性读即可——不要
+    只认某一个类，否则会静默返回 0，让成本统计失效。
+    """
+    p = int(getattr(client, "prompt_tokens", 0) or 0)
+    c = int(getattr(client, "completion_tokens", 0) or 0)
+    total = getattr(client, "total_tokens", None)
+    return (p, c, int(total) if total is not None else p + c)
+
+
+def _sync_cost_from_client(state, before, client) -> tuple[int, int, int]:
+    """把 client 相对 ``before`` 的增量记进 state，返回新的 baseline。
+
+    评估 / 规划 / 一致性这些非逐章路径的 token 只存在于 client 上，必须
+    显式回写——否则 --cost-budget 看不见它们（实测 53 批评估跑 1.5 小时，
+    state.cumulative_cost_cny 仍显示 ¥0.000）。
+    """
+    from novel.budget import estimate_cost_cny
+
+    p, c, t = _client_token_snapshot(client)
+    dp, dc, dt = _token_delta(before, (p, c, t))
+    state.cumulative_prompt_tokens += dp
+    state.cumulative_completion_tokens += dc
+    state.cumulative_tokens += dt
+    state.cumulative_cost_cny += estimate_cost_cny(dp, dc, _client_model(client))
+    return (p, c, t)
+
+
+def _flush_cost(state, client) -> tuple[int, int, int]:
+    """把 client 上**尚未入账**的 token 记进 state，可重复调用。
+
+    baseline 直接取 state 里已累计的量——并发 worker 逐章记的账也在这里，
+    所以收尾再 flush 一次不会重复计费。
+    """
+    baseline = (
+        state.cumulative_prompt_tokens,
+        state.cumulative_completion_tokens,
+        state.cumulative_tokens,
+    )
+    return _sync_cost_from_client(state, baseline, client)
 
 
 def _client_model(client) -> str:
@@ -1105,7 +1142,10 @@ def run_auto_novel(
         if (state.phase.value in (Phase.PLANNING.value, "draft") and not skip_plans
                 and only_set is None):
             _planning_phase(spec, project, client, state)
-        if state.phase.value in (
+        # surgical 重建时 only_chapters 非空——调用方明确要求重写这些章，
+        # 阶段值不该有否决权。否则 phase=done 的项目续跑时会整块跳过写作，
+        # 变成「只评估不重写」的活锁。
+        if only_set is not None or state.phase.value in (
             Phase.PLANNING.value, Phase.WRITING.value, "draft",
         ):
             _writing_phase(spec, project, client, state, only_chapters=only_set)
@@ -1150,6 +1190,9 @@ def run_auto_novel(
     if out is None:
         # 续跑时导出块被跳过（phase 非 CONSISTENCY/EXPORTING），给出期望路径
         out = project_dir / "book.md"
+    # 规划 / 写作 / 润色 / 一致性 各路径的 token 回写，确保预算护栏看到全部开销
+    _flush_cost(state, client)
+    state.save(project_dir)
     _print_summary(state, out)
     return out
 

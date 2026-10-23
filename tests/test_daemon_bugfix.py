@@ -298,6 +298,144 @@ class TestResumeFromDonePhase:
 
 
 # ---------------------------------------------------------------------------
+# G. token 快照必须读得懂 TokenTracker（auto 里 client 真正的类型）
+# ---------------------------------------------------------------------------
+
+class TestTokenSnapshotFromTracker:
+    """run_auto_novel 把 client 包成 TokenTracker 再传下去——快照必须认它。"""
+
+    def _tracker(self):
+        from novel.token_tracker import TokenTracker
+
+        return TokenTracker(client=object(), model="minimax-Text-01")
+
+    def test_snapshot_reads_tracker_counters(self):
+        from novel.auto import _client_token_snapshot
+
+        tt = self._tracker()
+        tt.record(1200, 800)
+        assert _client_token_snapshot(tt) == (1200, 800, 2000)
+
+    def test_snapshot_of_fresh_tracker_is_zero(self):
+        from novel.auto import _client_token_snapshot
+
+        assert _client_token_snapshot(self._tracker()) == (0, 0, 0)
+
+
+class TestSyncCostFromClient:
+    """评估等非写作路径的 token 也必须计入 state，否则预算护栏形同虚设。"""
+
+    def test_sync_adds_delta_into_state(self):
+        from novel.auto import _sync_cost_from_client
+        from novel.auto_state import AutoState
+        from novel.token_tracker import TokenTracker
+
+        state = AutoState()
+        tt = TokenTracker(client=object(), model="minimax-Text-01")
+        tt.record(1000, 500)
+
+        _sync_cost_from_client(state, (0, 0, 0), tt)
+
+        assert state.cumulative_tokens == 1500
+        assert state.cumulative_prompt_tokens == 1000
+        assert state.cumulative_completion_tokens == 500
+        assert state.cumulative_cost_cny > 0
+
+    def test_sync_with_advanced_baseline_adds_only_increment(self):
+        """baseline 前进后只计增量，不重复累加已入账的部分。"""
+        from novel.auto import _sync_cost_from_client
+        from novel.auto_state import AutoState
+        from novel.token_tracker import TokenTracker
+
+        state = AutoState()
+        tt = TokenTracker(client=object(), model="minimax-Text-01")
+        tt.record(1000, 500)
+        _sync_cost_from_client(state, (0, 0, 0), tt)
+        mid = state.cumulative_tokens
+
+        tt.record(200, 100)
+        _sync_cost_from_client(state, (1000, 500, 1500), tt)
+        assert state.cumulative_tokens == mid + 300
+
+
+class TestFlushCostIsIdempotent:
+    """_flush_cost 收尾再调一次不能把成本翻倍——worker 已逐章入账。"""
+
+    def _state_and_tracker(self):
+        from novel.auto_state import AutoState
+        from novel.token_tracker import TokenTracker
+
+        return AutoState(), TokenTracker(client=object(), model="minimax-Text-01")
+
+    def test_repeated_flush_does_not_double_count(self):
+        from novel.auto import _flush_cost
+
+        state, tt = self._state_and_tracker()
+        tt.record(1000, 500)
+
+        _flush_cost(state, tt)
+        after_first = state.cumulative_tokens
+        _flush_cost(state, tt)
+        assert state.cumulative_tokens == after_first
+
+    def test_flush_picks_up_new_usage(self):
+        from novel.auto import _flush_cost
+
+        state, tt = self._state_and_tracker()
+        tt.record(1000, 500)
+        _flush_cost(state, tt)
+        mid = state.cumulative_tokens
+
+        tt.record(400, 200)
+        _flush_cost(state, tt)
+        assert state.cumulative_tokens == mid + 600
+
+
+# ---------------------------------------------------------------------------
+# H. surgical 重建不能被 state.phase 挡住
+# ---------------------------------------------------------------------------
+
+class TestSurgicalRebuildNotBlocked:
+    """phase=done 时续跑，surgical 的 only_chapters 仍必须真的走写作阶段。"""
+
+    def test_writing_phase_runs_for_surgical_despite_done_phase(self, tmp_path, monkeypatch):
+        import novel.auto as auto_mod
+        from novel.auto import run_auto_novel
+        from novel.auto_state import AutoSpec, AutoState, Phase, QualityPreset
+
+        monkeypatch.setenv("DRY_RUN", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key-12345678")
+
+        calls: list = []
+        real = auto_mod._writing_phase
+
+        def spy(spec, project, client, state, only_chapters=None):
+            calls.append(only_chapters)
+            return real(spec, project, client, state, only_chapters=only_chapters)
+
+        monkeypatch.setattr(auto_mod, "_writing_phase", spy)
+
+        spec = AutoSpec(
+            title="surgical_phase",
+            target_words=9000,
+            target_chapters=5,
+            quality=QualityPreset.DRAFT,
+            parallel=2,
+        )
+        run_auto_novel(spec, tmp_path)
+
+        state = AutoState.load(tmp_path)
+        assert state is not None
+        state.phase = Phase.DONE
+        state.save(tmp_path)
+
+        calls.clear()
+        run_auto_novel(spec, tmp_path, state=state, only_chapters=[3])
+
+        assert calls == [{3}]
+
+
+# ---------------------------------------------------------------------------
 # 回归护栏：auto_control.json 的形状别被改坏
 # ---------------------------------------------------------------------------
 

@@ -308,13 +308,14 @@ def _daemon_loop(
                 console.print(f"{head} [yellow]{len(ns)} 章未达标：{span}[/yellow]")
             else:
                 console.print(f"{head} [green]全通过[/green]")
+        eval_client = LLMClient(cfg)
         try:
             report = evaluate_batches(
                 criteria_lines, chapters,
                 batch_size=eval_batch_size,
                 overlap=eval_overlap,
                 prev_feedback=prev_feedback,
-                client=LLMClient(cfg),
+                client=eval_client,
                 on_progress=_on_progress,
             )
         except Exception as e:
@@ -323,6 +324,13 @@ def _daemon_loop(
             state.last_iter_passed = False
             state.save(project_dir)
             return state
+        finally:
+            # 评估的 token 只活在这个临时 client 上（53 批可跑 1.5 小时）。
+            # 不回写的话 --cost-budget 完全看不见这笔开销。
+            from novel.auto import _flush_cost
+
+            _flush_cost(state, eval_client)
+            state.save(project_dir)
 
         state.last_criteria_report = report.raw_text
         state.last_iter_passed = report.all_passed
