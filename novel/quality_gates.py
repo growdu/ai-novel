@@ -53,7 +53,10 @@ def check_word_count(content: str, target: int, tolerance: float) -> GateResult:
     )
 
 
-_AI_RE = re.compile(r"AI\s*味指数[：:]?\s*(\d+)")
+# 容得下模型的各种排版：数值可能在下一行、可能带粗体、可能带 /100 后缀。
+# 失配会让门控「无法解析 → 按通过处理」而静默放行（实测 51 份 radar 报告
+# 有 21 份因此绕过门控）。
+_AI_RE = re.compile(r"AI\s*味指数[：:]?\s*\**\s*(\d+)")
 
 
 def parse_ai_flavor_score(ai_report_text: str) -> Optional[int]:
@@ -73,7 +76,7 @@ def parse_radar_score(radar_text: str) -> Optional[int]:
     """从风格雷达报告里提取总相似度。"""
     if not radar_text:
         return None
-    m = re.search(r"总相似度[：:]?\s*(\d+)", radar_text)
+    m = re.search(r"总相似度[：:]?\s*\**\s*(\d+)", radar_text)
     if m:
         try:
             return int(m.group(1))

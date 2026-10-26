@@ -862,6 +862,55 @@ class TestEnvOverridesDotenv:
 
 
 # ---------------------------------------------------------------------------
+# Q. 分数解析必须容得下模型的各种排版
+# ---------------------------------------------------------------------------
+
+class TestScoreParsingRobustness:
+    """模型有时把数值放到下一行并加粗——正则失配会让门控静默放行。"""
+
+    def test_radar_score_with_colon_on_same_line(self):
+        from novel.quality_gates import parse_radar_score
+
+        assert parse_radar_score("### 1. 总相似度：82") == 82
+
+    def test_radar_score_on_next_line_bold(self):
+        from novel.quality_gates import parse_radar_score
+
+        assert parse_radar_score("#### 1. 总相似度\n**75/100**") == 75
+
+    def test_radar_score_with_slash_suffix(self):
+        from novel.quality_gates import parse_radar_score
+
+        assert parse_radar_score("总相似度：82/100") == 82
+
+    def test_radar_score_bold_same_line(self):
+        from novel.quality_gates import parse_radar_score
+
+        assert parse_radar_score("**总相似度：82**") == 82
+
+    def test_ai_score_on_next_line_bold(self):
+        from novel.quality_gates import parse_ai_flavor_score
+
+        assert parse_ai_flavor_score("### AI 味指数\n**65/100**") == 65
+
+    def test_ai_score_bold_same_line(self):
+        from novel.quality_gates import parse_ai_flavor_score
+
+        assert parse_ai_flavor_score("**AI 味指数：45**") == 45
+
+    def test_ai_score_with_slash_suffix(self):
+        from novel.quality_gates import parse_ai_flavor_score
+
+        assert parse_ai_flavor_score("AI 味指数：75/100") == 75
+
+    def test_no_number_still_returns_none(self):
+        from novel.quality_gates import parse_ai_flavor_score, parse_radar_score
+
+        assert parse_radar_score("无法判断") is None
+        assert parse_ai_flavor_score("") is None
+
+
+# ---------------------------------------------------------------------------
 # 回归护栏：auto_control.json 的形状别被改坏
 # ---------------------------------------------------------------------------
 
