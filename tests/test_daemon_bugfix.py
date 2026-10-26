@@ -826,6 +826,42 @@ class TestAiFlavorGateUsesIssueCount:
 
 
 # ---------------------------------------------------------------------------
+# P. 环境变量必须优先于 .env（干跑开关不能被静默覆盖）
+# ---------------------------------------------------------------------------
+
+class TestEnvOverridesDotenv:
+    """load_global 过去用 os.environ[k]=v 覆盖外部环境变量。"""
+
+    def test_env_var_wins_over_dotenv(self, tmp_path, monkeypatch):
+        """DRY_RUN=true 传进环境，.env 里写 false 时仍须为 true。"""
+        from novel.config import load_global
+
+        (tmp_path / ".env").write_text(
+            "DRY_RUN=false\nOPENAI_API_KEY=from-dotenv\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("DRY_RUN", "true")
+
+        cfg = load_global()
+        assert cfg.dry_run is True
+
+    def test_dotenv_still_fills_missing_vars(self, tmp_path, monkeypatch):
+        """没设过的变量仍从 .env 取。"""
+        from novel.config import load_global
+
+        (tmp_path / ".env").write_text(
+            "DRY_RUN=false\nOPENAI_MODEL=dotenv-model\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("OPENAI_MODEL", raising=False)
+        monkeypatch.delenv("DRY_RUN", raising=False)
+
+        cfg = load_global()
+        assert cfg.model == "dotenv-model"
+        assert cfg.dry_run is False
+
+
+# ---------------------------------------------------------------------------
 # 回归护栏：auto_control.json 的形状别被改坏
 # ---------------------------------------------------------------------------
 

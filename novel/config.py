@@ -83,7 +83,12 @@ class GlobalConfig:
 
 
 def load_global() -> GlobalConfig:
-    """加载全局配置：每次调用都重新读取 .env（不依赖 dotenv 包）。"""
+    """加载全局配置：每次调用都重新读取 .env（不依赖 dotenv 包）。
+
+    **外部已设置的环境变量优先于 .env**（标准 dotenv 语义）。此前直接
+    `os.environ[k] = v` 覆盖，导致 `DRY_RUN=true` 这类安全开关被 .env 里的
+    `DRY_RUN=false` 静默吃掉——实测一次「干跑」验证发起了真实 API 调用。
+    """
     p = Path.cwd()
     for cand in [p / ".env", p.parent / ".env"]:
         if cand.exists():
@@ -92,7 +97,7 @@ def load_global() -> GlobalConfig:
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 k, v = line.split("=", 1)
-                os.environ[k.strip()] = v.strip()
+                os.environ.setdefault(k.strip(), v.strip())
             break
     return GlobalConfig()
 
