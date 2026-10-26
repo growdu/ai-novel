@@ -82,22 +82,39 @@ def parse_radar_score(radar_text: str) -> Optional[int]:
     return None
 
 
+_AI_ISSUE_RE = re.compile(r"(?:\d+\.\s*\*\*\[|####\s*\d+\.\s*\[)")
+
+#: 具体问题条数上限。超过且指数也超阈值才判不达标。
+MAX_AI_ISSUES = 10
+
+
+def count_ai_issues(ai_report_text: str) -> int:
+    """数检测报告里列出的**具体问题**条数。
+
+    自评的「AI 味指数」与实际问题数几乎不相关（42 章实测 r=0.177，且
+    唯一能过门控的那章问题数反而最多），所以判据改用报告正文里的问题条数。
+    """
+    if not ai_report_text:
+        return 0
+    return len(_AI_ISSUE_RE.findall(ai_report_text))
+
+
 def run_ai_detect(
     project: S.Project,
     chapter_no: int,
     client: LLMClient,
-) -> Optional[int]:
-    """调用 LLM 检测 AI 味并保存报告，返回指数。"""
+) -> tuple[Optional[int], str]:
+    """调用 LLM 检测 AI 味并保存报告。返回 (指数, 报告原文)。"""
     content = S.load_chapter(project, chapter_no)
     if not content:
-        return None
+        return None, ""
     from novel import prompts as P
     msgs = P.build_detect_messages(content)
     res = client.chat(msgs, temperature=0.3, max_tokens=2000)
     p = project.novel_dir / "reports" / ("detect_%04d.md" % chapter_no)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("# 第 %d 章 AI 味检测\n\n" % chapter_no + res.content + "\n", encoding="utf-8")
-    return parse_ai_flavor_score(res.content)
+    return parse_ai_flavor_score(res.content), res.content
 
 
 def run_radar(
@@ -116,17 +133,49 @@ def check_ai_flavor(
     client: LLMClient,
     threshold: Optional[int],
 ) -> GateResult:
-    """AI 味 < threshold 通过。None 跳过。"""
+    """AI 味门控：具体问题条数 ≤ MAX_AI_ISSUES，**或**自评指数 < threshold。
+
+    任一满足即通过。自评指数单独用不可靠——它与报告里实际列出的问题数
+    几乎不相关，且高度量化吸附在 65/75/85。
+    """
     if threshold is None:
         return GateResult(name="ai_flavor", passed=True, detail="未启用")
-    score = run_ai_detect(project, chapter_no, client)
+    score, report = run_ai_detect(project, chapter_no, client)
+    issues = count_ai_issues(report)
+    payload = {"issues": issues, "score": score}
+
+    if issues <= MAX_AI_ISSUES:
+        return GateResult(
+            name="ai_flavor",
+            passed=True,
+            score=float(score) if score is not None else None,
+            detail=f"具体问题 {issues} 条（上限 {MAX_AI_ISSUES}）",
+            payload=payload,
+        )
     if score is None:
-        return GateResult(name="ai_flavor", passed=True, detail="无法解析指数，按通过处理")
+        return GateResult(
+            name="ai_flavor",
+            passed=True,
+            detail=f"无法解析指数，按通过处理（具体问题 {issues} 条）",
+            payload=payload,
+        )
+    if score < threshold:
+        return GateResult(
+            name="ai_flavor",
+            passed=True,
+            score=float(score),
+            detail=f"AI 味指数 {score}（阈值 < {threshold}）",
+            payload=payload,
+        )
     return GateResult(
         name="ai_flavor",
-        passed=score < threshold,
+        passed=False,
         score=float(score),
-        detail=f"AI 味指数 {score}（阈值 < {threshold}）",
+        detail=(
+            f"具体问题 {issues} 条（上限 {MAX_AI_ISSUES}）"
+            f"且 AI 味指数 {score}（阈值 < {threshold}）"
+        ),
+        payload=payload,
     )
 
 

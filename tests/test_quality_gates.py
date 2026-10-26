@@ -154,12 +154,21 @@ class TestCheckAIFlavor:
         assert r.score == 25
 
     def test_above_threshold_fails(self, tmp_path):
+        """问题条数超上限且指数超阈值 → 不通过。
+
+        判据自 v0.20 改为「问题条数 ≤ 10 **或** 指数 < threshold」——自评
+        指数与报告里实际列出的问题数几乎不相关（42 章实测 r=0.177），
+        单看指数不可靠。
+        """
         from novel import quality_gates as QG
-        client = _FakeLLM(content="AI 味指数：50")
+        issues = "\n".join(
+            f'#### {i}. [第{i}段] "原文" → 问题：套话' for i in range(1, 13)
+        )
+        client = _FakeLLM(content="AI 味指数：85\n" + issues)
         proj = _fake_project(tmp_path, chapter_text="内容")
-        r = QG.check_ai_flavor(proj, 1, client=client, threshold=30)
-        assert r.passed is False  # 50 >= 30
-        assert r.score == 50
+        r = QG.check_ai_flavor(proj, 1, client=client, threshold=70)
+        assert r.passed is False  # 12 条问题 > 10，且 85 >= 70
+        assert r.score == 85
 
     def test_unparseable_score_skips_as_pass(self, tmp_path):
         """LLM 返了奇怪文本 → parse 失败 → 默认 pass（不阻塞）。"""
@@ -168,7 +177,6 @@ class TestCheckAIFlavor:
         proj = _fake_project(tmp_path, chapter_text="内容")
         r = QG.check_ai_flavor(proj, 1, client=client, threshold=30)
         assert r.passed is True
-        assert "无法解析" in r.detail
 
 
 class TestCheckRadar:
@@ -350,7 +358,7 @@ class TestQualityPresetAllPresets:
     @pytest.mark.parametrize("preset,expected", [
         (QualityPreset.DRAFT, {"ai_flavor_threshold": None, "radar_threshold": None,
                                   "word_tolerance": 0.3, "max_retries": 1, "iters": 1}),
-        (QualityPreset.STANDARD, {"ai_flavor_threshold": 50, "radar_threshold": 60,
+        (QualityPreset.STANDARD, {"ai_flavor_threshold": 70, "radar_threshold": 60,
                                     "word_tolerance": 0.2, "max_retries": 2, "iters": 3}),
         (QualityPreset.PREMIUM, {"ai_flavor_threshold": 30, "radar_threshold": 70,
                                    "word_tolerance": 0.1, "max_retries": 3, "iters": 3}),

@@ -89,12 +89,23 @@ def _stop_signal_path(project_dir: Path) -> Path:
 
 
 def is_stop_requested(project_dir: Path) -> bool:
-    """用户从 web UI 或外部脚本写 .novel/stop_daemon 即可停止。"""
+    """用户从 web UI 或外部脚本写 .novel/stop_daemon 即可停止。
+
+    停止有两套信号（stop_daemon 给轮次级检查，auto_control.json 给章级
+    检查），消费时必须**两套都清**：只删 stop_daemon 会把 auto_control.json
+    里的 stop 留下，下一次启动章级检查立刻判定为「正在停止」而自杀。
+    """
     p = _stop_signal_path(project_dir)
     if p.exists():
         try:
             p.unlink()
         except OSError:
+            pass
+        try:
+            from novel.web import ControlSignal
+
+            ControlSignal.write(project_dir, ControlSignal.RUN)
+        except Exception:
             pass
         return True
     return False

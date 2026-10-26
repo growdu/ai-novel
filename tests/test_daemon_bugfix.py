@@ -543,6 +543,289 @@ class TestWordCountStandardIsAchievable:
 
 
 # ---------------------------------------------------------------------------
+# K. 阶段级停止：润色/一致性/导出也必须能停
+# ---------------------------------------------------------------------------
+
+class TestPhaseLevelStop:
+    """停止信号与预算都只在写作阶段检查——润色阶段曾完全无法中断。"""
+
+    def _project(self, tmp_path):
+        from novel.storage import Project, init_project
+
+        if not (tmp_path / ".novel").exists():
+            init_project(tmp_path, "stop_test")
+        return Project(
+            root=tmp_path.resolve(),
+            title="stop_test",
+            meta={"genre": "科幻末世"},
+        )
+
+    def _state(self, tmp_path):
+        from novel.auto_state import AutoSpec, AutoState
+
+        spec = AutoSpec(title="stop_test", target_words=6000, target_chapters=3)
+        state = AutoState(spec=spec.__dict__, chapters_total=3)
+        state.chapters_failed = [1, 2, 3]
+        state.save(tmp_path)
+        return state
+
+    def _spec(self):
+        from novel.auto_state import AutoSpec, QualityPreset
+
+        return AutoSpec(
+            title="stop_test",
+            target_words=6000,
+            target_chapters=3,
+            quality=QualityPreset.STANDARD,
+        )
+
+    def test_polishing_stops_on_stop_signal(self, tmp_path, monkeypatch):
+        from novel.auto import _polishing_phase, _StopRun
+
+        monkeypatch.setenv("DRY_RUN", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key-12345678")
+        project = self._project(tmp_path)
+        (tmp_path / ".novel" / "stop_daemon").write_text("", encoding="utf-8")
+
+        with pytest.raises(_StopRun):
+            _polishing_phase(self._spec(), project, object(), self._state(tmp_path))
+
+    def test_polishing_stops_when_budget_exhausted(self, tmp_path, monkeypatch):
+        from novel.auto import _polishing_phase, _StopRun
+
+        monkeypatch.setenv("DRY_RUN", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key-12345678")
+
+        state = self._state(tmp_path)
+        state.budget_cny = 0.10
+        state.cumulative_cost_cny = 0.20
+
+        with pytest.raises(_StopRun):
+            _polishing_phase(self._spec(), self._project(tmp_path), object(), state)
+
+    def test_polishing_continues_when_budget_ok(self, tmp_path, monkeypatch):
+        """预算充足 + 无停止信号时不应误停。"""
+        from novel.auto import _polishing_phase, _StopRun
+
+        monkeypatch.setenv("DRY_RUN", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key-12345678")
+
+        state = self._state(tmp_path)
+        state.budget_cny = 10.0
+        state.cumulative_cost_cny = 0.20
+
+        try:
+            _polishing_phase(self._spec(), self._project(tmp_path), object(), state)
+        except _StopRun:
+            pytest.fail("预算充足时不应触发停止")
+
+    def test_budget_is_persisted_into_state(self, tmp_path, monkeypatch):
+        """run_auto_novel 收到 budget_cny 必须写进 state，否则运行内无法判超支。"""
+        from novel.auto import run_auto_novel
+        from novel.auto_state import AutoSpec, AutoState, QualityPreset
+
+        monkeypatch.setenv("DRY_RUN", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key-12345678")
+
+        spec = AutoSpec(
+            title="budget_state",
+            target_words=6000,
+            target_chapters=3,
+            quality=QualityPreset.DRAFT,
+        )
+        run_auto_novel(spec, tmp_path, budget_cny=2.5)
+
+        state = AutoState.load(tmp_path)
+        assert state is not None
+        assert state.budget_cny == pytest.approx(2.5)
+
+
+# ---------------------------------------------------------------------------
+# L. 停止信号必须被完整消费（否则下次启动即自杀）
+# ---------------------------------------------------------------------------
+
+class TestStopSignalFullyConsumed:
+    """daemon stop 写两套信号；消费时必须两套都清，否则重启直接自杀。"""
+
+    def test_both_signals_cleared_when_stop_consumed(self, tmp_path):
+        from novel.commands._daemon import _write_stop_file
+        from novel.daemon import _stop_signal_path, is_stop_requested
+
+        _write_stop_file(tmp_path)
+        assert is_stop_requested(tmp_path) is True
+
+        assert not _stop_signal_path(tmp_path).exists()
+        assert ControlSignal.read(tmp_path) == ControlSignal.RUN
+
+    def test_chapter_loop_does_not_see_stop_after_consumption(self, tmp_path):
+        """消费完信号后，章级检查必须认为「没在停止」。"""
+        from novel.auto import _stop_requested
+        from novel.commands._daemon import _write_stop_file
+        from novel.daemon import is_stop_requested
+
+        _write_stop_file(tmp_path)
+        is_stop_requested(tmp_path)
+
+        assert _stop_requested(tmp_path) is False
+
+    def test_stop_signal_survives_when_no_stop_requested(self, tmp_path):
+        """没写信号时不应凭空造出 auto_control.json。"""
+        from novel.daemon import is_stop_requested
+
+        (tmp_path / ".novel").mkdir()
+        assert is_stop_requested(tmp_path) is False
+        assert ControlSignal.read(tmp_path) == ControlSignal.RUN
+
+
+# ---------------------------------------------------------------------------
+# M. 停止信号下并发写作不应刷 worker 异常
+# ---------------------------------------------------------------------------
+
+class TestParallelStopsQuietly:
+    def test_no_worker_exception_spam_when_stopped(self, tmp_path, monkeypatch, capsys):
+        from novel.auto import run_auto_novel
+        from novel.auto_state import AutoSpec, QualityPreset
+
+        monkeypatch.setenv("DRY_RUN", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key-12345678")
+
+        from novel.storage import init_project
+
+        init_project(tmp_path, "quiet_stop")
+        ControlSignal.write(tmp_path, ControlSignal.STOP)
+
+        spec = AutoSpec(
+            title="quiet_stop",
+            target_words=9000,
+            target_chapters=6,
+            quality=QualityPreset.DRAFT,
+            parallel=3,
+        )
+        run_auto_novel(spec, tmp_path)
+
+        out = capsys.readouterr().out
+        assert "并发 worker 异常" not in out
+
+
+# ---------------------------------------------------------------------------
+# N. DOWNGRADE 信号必须真的降级
+# ---------------------------------------------------------------------------
+
+class TestDowngradeSignalWorks:
+    """_DOWNGRADE_REQUESTED 此前只写不读——web UI 的降级按钮完全无效。"""
+
+    def _spec(self):
+        from novel.auto_state import AutoSpec, QualityPreset
+
+        return AutoSpec(
+            title="dg",
+            target_words=6000,
+            target_chapters=3,
+            quality=QualityPreset.STANDARD,
+        )
+
+    def test_downgrade_signal_switches_quality_to_draft(self, tmp_path):
+        from novel.auto import _apply_downgrade, _check_control_signal
+
+        (tmp_path / ".novel").mkdir()
+        ControlSignal.write(tmp_path, ControlSignal.DOWNGRADE)
+        _check_control_signal(tmp_path)
+
+        spec = self._spec()
+        _apply_downgrade(spec, tmp_path)
+        assert spec.quality.value == "draft"
+
+    def test_no_signal_leaves_quality_untouched(self, tmp_path):
+        from novel.auto import _apply_downgrade, _check_control_signal
+
+        (tmp_path / ".novel").mkdir()
+        ControlSignal.write(tmp_path, ControlSignal.RUN)
+        _check_control_signal(tmp_path)
+
+        spec = self._spec()
+        _apply_downgrade(spec, tmp_path)
+        assert spec.quality.value == "standard"
+
+
+# ---------------------------------------------------------------------------
+# O. AI 味门控改用「具体问题条数」判据
+# ---------------------------------------------------------------------------
+
+def _detect_report(score: int, issues: int) -> str:
+    """构造一份与真实 detect 报告同构的文本。"""
+    lines = [f"### AI 味指数：{score}/100", "", "### 具体问题与建议：", ""]
+    for i in range(1, issues + 1):
+        lines.append(f'#### {i}. [第{i}段] "原文{i}" → 问题：套话堆砌，建议改为：动作化描写。')
+    return "\n".join(lines)
+
+
+class TestAiFlavorGateUsesIssueCount:
+    """实测：自评指数与实际列出的问题数几乎不相关（r=0.177），判据要换。"""
+
+    def _proj(self, tmp_path):
+        from novel import storage as S
+
+        target = tmp_path / "p"
+        target.mkdir()
+        proj = S.init_project(target, "T", meta={"genre": "科幻末世"})
+        S.save_chapter(proj, 1, "正文" * 50)
+        return proj
+
+    def test_issue_count_parsed_from_report(self):
+        from novel.quality_gates import count_ai_issues
+
+        text = _detect_report(75, 3)
+        assert count_ai_issues(text) == 3
+
+    def test_issue_count_zero_for_plain_text(self):
+        from novel.quality_gates import count_ai_issues
+
+        assert count_ai_issues("AI 味指数：65") == 0
+
+    def test_few_issues_passes_even_with_high_score(self, tmp_path):
+        """问题少就是好——指数再高也不该卡。"""
+        from novel import quality_gates as QG
+        from novel.llm import LLMResult
+
+        class _C:
+            def chat(self, *a, **k):
+                return LLMResult(content=_detect_report(85, 4), model="fake")
+
+        r = QG.check_ai_flavor(self._proj(tmp_path), 1, client=_C(), threshold=70)
+        assert r.passed is True
+        assert "4" in r.detail
+
+    def test_many_issues_and_high_score_fails(self, tmp_path):
+        from novel import quality_gates as QG
+        from novel.llm import LLMResult
+
+        class _C:
+            def chat(self, *a, **k):
+                return LLMResult(content=_detect_report(85, 12), model="fake")
+
+        r = QG.check_ai_flavor(self._proj(tmp_path), 1, client=_C(), threshold=70)
+        assert r.passed is False
+        assert "12" in r.detail
+
+    def test_many_issues_but_low_score_passes(self, tmp_path):
+        """问题多但指数低于阈值时按通过处理（两条路任一满足即可）。"""
+        from novel import quality_gates as QG
+        from novel.llm import LLMResult
+
+        class _C:
+            def chat(self, *a, **k):
+                return LLMResult(content=_detect_report(65, 12), model="fake")
+
+        r = QG.check_ai_flavor(self._proj(tmp_path), 1, client=_C(), threshold=70)
+        assert r.passed is True
+
+    def test_standard_threshold_relaxed_to_70(self):
+        from novel.auto_state import QualityPreset
+
+        assert QualityPreset.STANDARD.ai_flavor_threshold == 70
+
+
+# ---------------------------------------------------------------------------
 # 回归护栏：auto_control.json 的形状别被改坏
 # ---------------------------------------------------------------------------
 

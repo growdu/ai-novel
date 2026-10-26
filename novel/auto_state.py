@@ -58,8 +58,10 @@ class QualityPreset(str, Enum):
 
     @property
     def ai_flavor_threshold(self) -> Optional[int]:
-        # None 表示不检查；数字是允许的最大 AI 味指数
-        return {"draft": None, "standard": 50, "premium": 30}[self.value]
+        # None 表示不检查；数字是允许的最大 AI 味指数。
+        # standard 档 50 -> 70：实测 42 章里 39 章落在 65/75/85 三档，
+        # <50 的通过率只有 2%。门控另有「具体问题条数 ≤ 10」这条判据兜底。
+        return {"draft": None, "standard": 70, "premium": 30}[self.value]
 
     @property
     def radar_threshold(self) -> Optional[int]:

@@ -64,6 +64,30 @@ console = Console()
 # Web 控制信号
 # ---------------------------------------------------------------------------
 
+class _StopRun(Exception):
+    """收到停止信号或预算耗尽：中止当前阶段并正常收尾。"""
+
+
+def _check_phase_gate(project_root: Path, state) -> None:
+    """阶段级闸门：停止信号 / 预算超限都会中止。
+
+    写作阶段由 worker 自己检查信号，但润色、一致性、导出这三个阶段历史上
+    没有任何检查点——实测停止信号生效后 daemon 仍继续润色 421 章并持续
+    调用 API。预算同理：只在迭代边界查，单轮 336 章 17 小时毫无约束
+    （¥0.5 预算实测跑出 ¥1.87）。
+    """
+    if _stop_requested(project_root):
+        console.print("[red]■ 检测到 STOP 信号：停止运行[/red]")
+        raise _StopRun("user requested stop")
+    budget = getattr(state, "budget_cny", 0.0) or 0.0
+    spent = getattr(state, "cumulative_cost_cny", 0.0) or 0.0
+    if budget > 0 and spent >= budget:
+        console.print(
+            f"[red]■ 预算耗尽：已花 ¥{spent:.3f} / ¥{budget:.3f}，中止当前阶段[/red]"
+        )
+        raise _StopRun(f"budget exhausted: {spent:.3f} >= {budget:.3f}")
+
+
 def _stop_requested(project_root: Path) -> bool:
     """任一停止信号存在即为真。
 
@@ -104,7 +128,29 @@ def _check_control_signal(project_root: Path) -> None:
         _mod._DOWNGRADE_REQUESTED = True
 
 
-_DOWNGRADE_REQUESTED = False
+_DOWNGRADE_REQUESTED = False  # 保留兼容；实际判定改读控制信号文件
+
+
+def _apply_downgrade(spec, project_root: Path) -> bool:
+    """若控制信号是 DOWNGRADE，把 spec 降级到 draft 档。
+
+    直接读控制信号文件而不用模块级标志：全局标志会跨调用残留（降级一次
+    就永远降级），而且此前只写不读——web UI 的「降到 draft 档」按钮
+    按下去毫无反应。
+    """
+    try:
+        from novel.web import ControlSignal
+    except ImportError:
+        return False
+    if ControlSignal.read(project_root) != ControlSignal.DOWNGRADE:
+        return False
+    from novel.auto_state import QualityPreset
+
+    if spec.quality == QualityPreset.DRAFT:
+        return False
+    console.print("[yellow]⬇ 应用降级：后续阶段改用 draft 档[/yellow]")
+    spec.quality = QualityPreset.DRAFT
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -618,8 +664,12 @@ def _writing_phase(
     else:
         console.print("[bold cyan]阶段 2/5：逐章生成[/bold cyan]")
 
-    # 注入 Web 控制信号检查
-    _check_control_signal(project.root)
+    # 注入 Web 控制信号 + 预算闸门。
+    # 用 _check_phase_gate 而非 _check_control_signal：后者抛 KeyboardInterrupt
+    # 会穿透 run_auto_novel 冒到 CLI，而并行 worker 里同一信号却是静默返回——
+    # 同一个信号两套语义。统一成 _StopRun，干净收尾。
+    _check_phase_gate(project.root, state)
+    _apply_downgrade(spec, project.root)
 
     # spec.parallel >= 2 时走并发（v0.13）
     if spec.parallel >= 2:
@@ -706,6 +756,7 @@ def _writing_phase_parallel(
     progress_lock = threading.Lock()
     prev_cache_lock = threading.Lock()
     prev_cache: dict[int, str] = {}  # chapter_no -> 当前已生成的正文
+    stop_event = threading.Event()  # 预算耗尽 / 停止：其余 worker 静默退出
 
     def safe_progress(**kwargs):
         with progress_lock:
@@ -713,6 +764,8 @@ def _writing_phase_parallel(
 
     def worker(n: int) -> None:
         """单个 worker：检查 → 构建 ctx（含 prev_cache）→ 写 → state.save。"""
+        if stop_event.is_set():
+            return
         # 0. 跳过已完成 / 跳过 surgical 范围外
         with state_lock:
             if only_chapters is not None and n not in only_chapters:
@@ -725,7 +778,14 @@ def _writing_phase_parallel(
                 safe_progress(advance=1, description=f"第 {n} 章：跳过（已完成）")
                 return
 
-        # 1. 控制信号（每个 worker 进入前都检查；文件读取是原子的）
+        # 1. 控制信号 + 预算闸门（每个 worker 进入前都检查）
+        # 预算只在迭代边界查过一次不够：单轮 336 章 surgical 要 17 小时，
+        # 期间毫无约束（实测 ¥0.5 预算跑出 ¥1.87）。这里按章拦。
+        try:
+            _check_phase_gate(project.root, state)
+        except _StopRun:
+            stop_event.set()
+            return
         try:
             _check_control_signal(project.root)
         except SystemExit:
@@ -919,6 +979,7 @@ def _polishing_phase(
     """如果精修档以下 / 状态跳过了这一步。"""
     state.phase = Phase.POLISHING
     state.save(project.root)
+    _apply_downgrade(spec, project.root)
     if spec.quality.value == "draft":
         state.polished = True
         state.save(project.root)
@@ -935,6 +996,7 @@ def _polishing_phase(
         state.save(project.root)
         return
     for n in failed:
+        _check_phase_gate(project.root, state)
         try:
             outline_text = project.outline_path.read_text(encoding="utf-8") if project.outline_path.exists() else ""
             plan = G.parse_chapter_plan(outline_text, n)
@@ -971,6 +1033,7 @@ def _consistency_phase(
     state.phase = Phase.CONSISTENCY
     state.save(project.root)
     console.print("[bold cyan]阶段 4/5：跨章一致性[/bold cyan]")
+    _check_phase_gate(project.root, state)
     try:
         # v0.16+：only_chapters 时不重跑（v0.16+ 用 criteria 评估代替 consistency）
         if only_chapters is not None:
@@ -998,6 +1061,7 @@ def _exporting_phase(
     state.phase = Phase.EXPORTING
     state.save(project.root)
     console.print("[bold cyan]阶段 5/5：导出[/bold cyan]")
+    _check_phase_gate(project.root, state)
     out = G.export_combined(project, fmt="md")
     if out is None:
         # 兜底路径
@@ -1122,6 +1186,9 @@ def run_auto_novel(
             "target_chapters": spec.target_chapters,
             "quality": spec.quality.value,
         }
+    # 预算上限必须落进 state——阶段级闸门靠它判超支
+    if budget_cny:
+        state.budget_cny = float(budget_cny)
     state.save(project_dir)
 
     console.print(
@@ -1165,6 +1232,12 @@ def run_auto_novel(
             # v0.16+：surgical 时 consistency phase 已被 _consistency_phase 跳过
             _consistency_phase(spec, project, client, state, only_chapters=only_set)
             out = _exporting_phase(spec, project, state)
+    except _StopRun as e:
+        # 停止信号 / 预算耗尽：正常收尾，state 保留进度供下次续跑
+        console.print(f"[yellow]阶段中止：{e}[/yellow]")
+        state.last_error = str(e)
+        state.save(project_dir)
+        return project_dir / "book.md"
     except KeyboardInterrupt:
         console.print("[yellow]用户中断。再次跑 `novel auto --resume` 可续跑。[/yellow]")
         state.last_error = "用户中断（Ctrl-C）"
