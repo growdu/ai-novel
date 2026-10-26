@@ -911,6 +911,69 @@ class TestScoreParsingRobustness:
 
 
 # ---------------------------------------------------------------------------
+# R. 生成失败绝不能用占位符覆盖已有正文
+# ---------------------------------------------------------------------------
+
+class TestFailureKeepsExistingContent:
+    """实测 285 章被限流失败后写进占位符，原正文被覆盖掉。"""
+
+    def _setup(self, tmp_path, monkeypatch):
+        from novel import storage as S
+        from novel.auto_state import AutoSpec, AutoState, QualityPreset
+
+        monkeypatch.setenv("DRY_RUN", "false")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key-12345678")
+
+        proj = S.init_project(tmp_path, "keep", meta={"genre": "科幻末世"})
+        S.save_chapter(proj, 1, "这是原本写好的正文，不该被占位符覆盖。" * 30)
+
+        spec = AutoSpec(
+            title="keep",
+            target_words=6000,
+            target_chapters=3,
+            quality=QualityPreset.STANDARD,
+        )
+        state = AutoState(spec=spec.__dict__, chapters_total=3)
+        return proj, spec, state
+
+    def _boom_client(self):
+        class _C:
+            def chat(self, *a, **k):
+                raise RuntimeError("rate limit: 429")
+
+            def chat_with_continuation(self, *a, **k):
+                raise RuntimeError("rate limit: 429")
+
+        return _C()
+
+    def test_existing_chapter_survives_generation_failure(self, tmp_path, monkeypatch):
+        from novel import storage as S
+        from novel.auto import _write_one_chapter_locked
+
+        proj, spec, state = self._setup(tmp_path, monkeypatch)
+
+        _write_one_chapter_locked(
+            spec, proj, 1, self._boom_client(), state, lambda **k: None
+        )
+
+        content = S.load_chapter(proj, 1) or ""
+        assert "自动生成失败占位" not in content
+        assert "原本写好的正文" in content
+
+    def test_result_reports_existing_word_count(self, tmp_path, monkeypatch):
+        """失败时 word_count 应反映保留的正文，而不是 0。"""
+        from novel.auto import _write_one_chapter_locked
+
+        proj, spec, state = self._setup(tmp_path, monkeypatch)
+
+        result = _write_one_chapter_locked(
+            spec, proj, 1, self._boom_client(), state, lambda **k: None
+        )
+        assert result.status == "failed"
+        assert result.word_count > 0
+
+
+# ---------------------------------------------------------------------------
 # 回归护栏：auto_control.json 的形状别被改坏
 # ---------------------------------------------------------------------------
 

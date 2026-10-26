@@ -493,14 +493,23 @@ def _write_one_chapter(
         console.print(f"  [red]第 {n} 章 generate 异常：{e}[/red]")
 
     if last_result is None:
-        # 兜底：手写一个空内容占位（让后续流程不中断）
-        placeholder = "（自动生成失败占位 — 请重跑或用 `novel chapter N` 手动重写）\n"
-        try:
-            S.save_chapter(project, n, placeholder, backup=False)
-        except Exception:
-            pass
+        # 生成失败：**已有正文绝不能被占位符覆盖**。
+        # 实测 MiniMax 配额用尽（429），285 章在失败后被写进
+        # 「（自动生成失败占位…）」，原正文直接消失。只在原本就没有内容时
+        # 才写占位符。
+        existing = S.load_chapter(project, n) or ""
+        if not existing.strip():
+            placeholder = "（自动生成失败占位 — 请重跑或用 `novel chapter N` 手动重写）\n"
+            try:
+                S.save_chapter(project, n, placeholder, backup=False)
+            except Exception:
+                pass
+        else:
+            console.print(f"  [yellow]第 {n} 章生成失败，保留原正文[/yellow]")
         return ChapterResult(
-            chapter_no=n, status="failed", word_count=0, retries=retries,
+            chapter_no=n, status="failed",
+            word_count=S.chapter_word_count(existing),
+            retries=retries,
             elapsed_ms=int((time.time() - start) * 1000), error=last_err,
         )
 
@@ -892,13 +901,20 @@ def _write_one_chapter_locked(
         console.print(f"  [red]第 {n} 章 generate 异常：{e}[/red]")
 
     if last_result is None:
-        placeholder = "（自动生成失败占位 — 请重跑或用 `novel chapter N` 手动重写）\n"
-        try:
-            S.save_chapter(project, n, placeholder, backup=False)
-        except Exception:
-            pass
+        # 同上：已有正文不能被占位符覆盖
+        existing = S.load_chapter(project, n) or ""
+        if not existing.strip():
+            placeholder = "（自动生成失败占位 — 请重跑或用 `novel chapter N` 手动重写）\n"
+            try:
+                S.save_chapter(project, n, placeholder, backup=False)
+            except Exception:
+                pass
+        else:
+            console.print(f"  [yellow]第 {n} 章生成失败，保留原正文[/yellow]")
         return ChapterResult(
-            chapter_no=n, status="failed", word_count=0, retries=retries,
+            chapter_no=n, status="failed",
+            word_count=S.chapter_word_count(existing),
+            retries=retries,
             elapsed_ms=int((time.time() - start) * 1000), error=last_err,
         )
 
